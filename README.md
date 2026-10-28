@@ -7,17 +7,19 @@ LinkedIn Message Tracker; the message log is now one of its sections.
 |---|---|
 | **Overview** | This month's income, expenses and profit, active clients, running costs, balances, a 12-month growth chart, what's coming up (renewals, task and goal deadlines), goals, LinkedIn replies you're waiting for, top clients |
 | **Customers** | Clients, collaborators and leads: contact details, country, tags, notes, photo, what they paid you, their LinkedIn conversation, tasks and assets |
-| **Assets** | Servers/VPS, domains, online accounts, payment accounts (PayPal, Payoneer, Wise…), bank accounts, software licenses: logins, encrypted passwords / API keys, cost, renewal dates, balances |
+| **Assets** | Servers/VPS, domains, online accounts, email accounts, payment accounts (PayPal, Payoneer, Wise…), bank accounts, software licenses: logins, encrypted passwords / API keys, cost, renewal dates, balances. Email and online accounts also keep encrypted backup codes, app passwords, security answers and a 2-step setup key — the app shows the current 6-digit code (`totp.js`) |
 | **Finance** | Income and expenses in any currency, by month, with period filters, search and CSV export |
 | **Goals & Plans** | Goals measured from your data (income, profit, active clients, tasks done) or by hand, and a To do / In progress / Done task board |
 | **LinkedIn** | The LinkedIn message tracker: contacts, sent/received messages with images, "seen" markers, several LinkedIn accounts |
+
+**Settings → Appearance** switches between a light and a dark theme (or follows Windows) and can put a color or a picture of your own behind the pages; it is saved per PC.
 
 `Ctrl+Shift+1…6` switches sections, `Ctrl+N` adds something to the current section, `Ctrl+F` searches it.
 
 ## Use it
 
-- **Install:** run `dist\IT Business Manager Setup 3.3.1.exe` (installs over earlier versions), or
-- **No install:** run `dist\ITBusinessManager-Portable-3.3.1.exe`.
+- **Install:** run `dist\IT Business Manager Setup 3.5.2.exe` (installs over earlier versions), or
+- **No install:** run `dist\ITBusinessManager-Portable-3.5.2.exe`.
 
 ## Your data
 
@@ -39,7 +41,7 @@ Every change is written immediately.
   app opens and written back encrypted after every change; backups and exported copies are
   encrypted too. "Remember on this PC" keeps the key in `keys.json`, protected with DPAPI for your
   Windows account. **A forgotten password can't be recovered.**
-- Passwords / API keys on assets are encrypted with Windows DPAPI for your Windows user account
+- Passwords / API keys, backup codes and 2-step keys on assets are encrypted with Windows DPAPI for your Windows user account
   (`vault.js`). Backups and copies of the database can be read back by the same Windows account,
   but not by another user or on another PC — keep a separate record of anything you can't lose.
 

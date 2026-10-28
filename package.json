@@ -1,7 +1,7 @@
 {
   "name": "lmessage-tracker",
   "productName": "IT Business Manager",
-  "version": "3.3.1",
+  "version": "3.5.2",
   "description": "Run your IT business: customers, assets, finances, goals and plans, and a LinkedIn message log.",
   "main": "main.js",
   "author": "James Clarke",
@@ -27,6 +27,7 @@
       "db.js",
       "vault.js",
       "cryptfile.js",
+      "totp.js",
       "preload.js",
       "src/**/*"
     ],

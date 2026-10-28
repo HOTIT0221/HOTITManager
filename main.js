@@ -1,13 +1,14 @@
 'use strict';
 
 const {
-  app, BrowserWindow, ipcMain, dialog, shell, Menu, protocol, clipboard, ClipboardItem, nativeImage,
+  app, BrowserWindow, ipcMain, dialog, shell, Menu, protocol, clipboard, ClipboardItem, nativeImage, nativeTheme,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const store = require('./db');
 const vault = require('./vault');
 const cryptfile = require('./cryptfile');
+const totp = require('./totp');
 
 const APP_NAME = 'IT Business Manager'; // internal name: data folder and startup entry, don't change
 const DISPLAY_NAME = 'HOTIT Manager'; // the name shown to the user
@@ -386,7 +387,7 @@ function createWindow() {
     height: state.height || 820,
     minWidth: 820,
     minHeight: 560,
-    backgroundColor: '#f4f2ee',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0d1117' : '#f5f7fb',
     title: DISPLAY_NAME,
     icon: path.join(__dirname, 'build', 'icon.png'),
     show: false,
@@ -674,13 +675,29 @@ const DB_OPS = {
   saveRecord: store.saveRecord,
   deleteRecord: store.deleteRecord,
   restoreRecord: store.restoreRecord,
-  // passwords / API keys: encrypted for your Windows account (DPAPI) before they reach the database
-  setAssetSecret: async (id, plain) => store.setAssetSecret(id, plain ? await vault.protect(String(plain).slice(0, 20000)) : null),
+  // passwords / API keys, backup codes, 2-step keys: encrypted for your Windows account (DPAPI)
+  // before they reach the database. name: 'password' (default) or e.g. 'backupCodes', 'totp'.
+  setAssetSecret: async (id, plain, name = 'password') => {
+    let value = plain ? String(plain).slice(0, 20000) : null;
+    if (value && name === 'totp') {
+      value = value.trim();
+      if (!totp.parse(value)) {
+        throw new Error("that 2-step key isn't valid. Paste the setup key (letters A–Z and digits 2–7) or the otpauth:// link.");
+      }
+    }
+    return store.setAssetSecret(id, value ? await vault.protect(value) : null, name);
+  },
 };
 
-async function revealSecret(id) {
-  const enc = store.getAssetSecret(id);
+async function revealSecret(id, name = 'password') {
+  const enc = store.getAssetSecret(id, name);
   return enc ? vault.unprotect(enc) : null;
+}
+
+/** The current 2-step code of an asset: { code, remaining, period } or null. */
+async function currentCode(id) {
+  const key = await revealSecret(id, 'totp');
+  return key ? totp.code(key) : null;
 }
 
 let clipboardClearTimer = null;
@@ -704,10 +721,19 @@ ipcMain.handle('open:backups-folder', () => { fs.mkdirSync(BACKUP_DIR, { recursi
 ipcMain.handle('backup:export', () => exportBackup());
 ipcMain.handle('backup:import', () => importBackup());
 ipcMain.handle('db:move', () => moveDatabase());
-ipcMain.handle('secret:reveal', (_e, id) => revealSecret(id));
-// copy a password, and clear it from the clipboard after 30 seconds unless something else was copied
-ipcMain.handle('secret:copy', async (_e, id) => {
-  const value = await revealSecret(id);
+// the theme chosen in Settings → Appearance; remembered here too, so the window opens in its colors
+ipcMain.handle('theme:set', (_e, theme) => {
+  if (!['light', 'dark', 'system'].includes(theme)) return;
+  nativeTheme.themeSource = theme;
+  const cfg = readConfig();
+  if (cfg.theme !== theme) writeConfig({ ...cfg, theme });
+});
+ipcMain.handle('secret:reveal', (_e, id, name) => revealSecret(id, name));
+ipcMain.handle('secret:code', (_e, id) => currentCode(id));
+// copy a password (for a 2-step key: its current code), and clear it from the clipboard after
+// 30 seconds unless something else was copied
+ipcMain.handle('secret:copy', async (_e, id, name) => {
+  const value = name === 'totp' ? (await currentCode(id))?.code ?? null : await revealSecret(id, name);
   if (value === null) return false;
   await clipboard.writeText(value); // (the clipboard API is asynchronous in this Electron version)
   clearTimeout(clipboardClearTimer);
@@ -809,6 +835,8 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.whenReady().then(async () => {
     app.setAppUserModelId('com.jamesdavidclarke.lmessagetracker');
+    const { theme } = readConfig();
+    if (['light', 'dark', 'system'].includes(theme)) nativeTheme.themeSource = theme;
     await openDatabase();
     try {
       migrateStartupEntry();

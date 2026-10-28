@@ -121,7 +121,6 @@ function renderCustomerDetail() {
     return;
   }
 
-  const contact = c.contactId ? contactById(c.contactId) : null;
   const yearAgo = addMonths(today(), -12);
   const allIncome = customerIncome(c.id);
   const yearIncome = customerIncome(c.id, yearAgo);
@@ -131,10 +130,12 @@ function renderCustomerDetail() {
   const assets = state.db.assets.filter((a) => a.customerId === c.id);
   const headline = c.role && c.company ? `${c.role} at ${c.company}` : c.company || c.role;
   const links = [];
-  if (c.email) links.push(`<a class="url-link" data-href="mailto:${esc(c.email)}" title="Write an email">${esc(c.email)}</a>`);
-  if (c.phone) links.push(`<a class="url-link" data-copy="${esc(c.phone)}" title="Copy phone number">${esc(c.phone)}</a>`);
-  if (c.website) links.push(`<a class="url-link" data-href="${esc(fullUrl(c.website))}" title="Open in browser">${esc(c.website.replace(/^https?:\/\//, ''))}</a>`);
-  if (c.linkedinUrl) links.push(`<a class="url-link" data-href="${esc(fullUrl(c.linkedinUrl))}" title="Open LinkedIn profile">LinkedIn profile</a>`);
+  // click copies; the text shown is what gets copied
+  const copyLink = (value, what) => `<a class="url-link" data-copy="${esc(value)}" title="Copy ${what}">${esc(value)}</a>`;
+  if (c.email) links.push(copyLink(c.email, 'email'));
+  if (c.phone) links.push(copyLink(c.phone, 'phone number'));
+  if (c.website) links.push(copyLink(fullUrl(c.website), 'website'));
+  if (c.linkedinUrl) links.push(copyLink(fullUrl(c.linkedinUrl), 'LinkedIn profile'));
 
   el.innerHTML = `
     <div class="thread-header">
@@ -185,11 +186,6 @@ function renderCustomerDetail() {
         </section>
 
         <section class="box">
-          <div class="box-head"><h3>LinkedIn conversation</h3></div>
-          ${linkedInBoxHtml(c, contact)}
-        </section>
-
-        <section class="box">
           <div class="box-head"><h3>Plan</h3><button type="button" class="link-btn" data-cu="task">+ Add task</button></div>
           ${tasks.length ? `<div class="mini-list">${tasks.map(taskMiniRowHtml).join('')}</div>` : '<div class="box-empty">No open tasks.</div>'}
         </section>
@@ -203,35 +199,6 @@ function renderCustomerDetail() {
         ${c.notes ? `<section class="box wide"><div class="box-head"><h3>Notes</h3></div><div class="notes">${esc(c.notes)}</div></section>` : ''}
       </div>
     </div>`;
-}
-
-function linkedInBoxHtml(c, contact) {
-  if (contact) {
-    const msgs = messagesFor(contact.id);
-    const last = msgs[msgs.length - 1];
-    const status = contactStatus(msgs);
-    const line = !last ? 'No messages logged yet'
-      : status === 'awaiting' ? `You wrote last · awaiting reply for ${ago(last.sentAt)}`
-        : `They replied ${ago(last.sentAt) === 'today' ? 'today' : `${ago(last.sentAt)} ago`}`;
-    return `
-      <div class="li-link">
-        ${contactAvatar(contact, 'sm')}
-        <div class="li-link-text">
-          <strong>${esc(contact.name)}</strong>
-          <span>${plural(msgs.length, 'message')} · ${esc(line)}</span>
-          ${last ? `<span class="li-preview">${last.direction === 'out' ? 'You' : esc(firstName(contact.name))}: ${esc(messagePreview(last))}</span>` : ''}
-        </div>
-      </div>
-      <button type="button" class="btn secondary small" data-open="conversation:${esc(contact.id)}">Open conversation</button>`;
-  }
-  const n = c.linkedinUrl ? normalizeUrl(c.linkedinUrl) : '';
-  const match = n && state.db.contacts.find((x) => x.linkedinUrl && normalizeUrl(x.linkedinUrl) === n);
-  if (match) {
-    return `<div class="box-empty">Found a logged conversation with this LinkedIn profile.</div>
-      <button type="button" class="btn secondary small" data-cu="link:${esc(match.id)}">Link ${esc(match.name)}</button>`;
-  }
-  return `<div class="box-empty">Not linked to a conversation in LinkedIn Messages.</div>
-    <button type="button" class="btn ghost small" data-cu="edit-link">Link a contact…</button>`;
 }
 
 function txMiniRowHtml(t) {
@@ -451,16 +418,6 @@ function deleteCustomerDialog(c) {
   });
 }
 
-async function linkCustomerToContact(c, contactId) {
-  try {
-    await saveRec('customer', { ...c, contactId });
-  } catch {
-    return;
-  }
-  refreshAll();
-  toast('LinkedIn conversation linked');
-}
-
 async function completeTask(id) {
   const t = byId('task', id);
   if (!t) return;
@@ -558,17 +515,15 @@ registerView({
       if (task) return openTaskModal(byId('task', task.dataset.task));
       const btn = e.target.closest('[data-cu]');
       if (!btn) return;
-      const [action, arg] = btn.dataset.cu.split(':');
+      const action = btn.dataset.cu;
       if (action === 'new') return openCustomerModal();
       if (!c) return;
       if (action === 'edit') openCustomerModal(c);
-      else if (action === 'edit-link') openCustomerModal(c, {}, { focus: 'contact' });
       else if (action === 'delete') deleteCustomerDialog(c);
       else if (action === 'photo') pickCustomerPhoto(c);
       else if (action === 'income') openTransactionModal(null, { type: 'income', customerId: c.id });
       else if (action === 'task') openTaskModal(null, { customerId: c.id });
       else if (action === 'asset') openAssetModal(null, { customerId: c.id });
-      else if (action === 'link') linkCustomerToContact(c, arg);
       else if (action === 'all-tx') showFinanceFor({ customerId: c.id });
     });
   },

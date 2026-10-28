@@ -2,8 +2,9 @@
 
 // ============================================================
 // Assets: servers, domains, online accounts, payment and bank accounts, software…
-// Passwords / API keys are encrypted by Windows in the main process and only decrypted
-// on request (Show / Copy); the renderer never keeps them.
+// Passwords / API keys and the other secrets (backup codes, 2-step keys…) are encrypted by
+// Windows in the main process and only decrypted on request (Show / Copy); the renderer never
+// keeps them.
 // ============================================================
 
 const ASSET_CATEGORIES = {
@@ -24,6 +25,16 @@ const ASSET_CATEGORIES = {
     label: 'Online account', plural: 'Accounts', icon: 'account', color: '#6d4fc2',
     provider: 'Service', providerPh: 'e.g. GitHub, Google Workspace, Upwork', login: 'Username / email',
     fields: [['email', 'Recovery email', ''], ['twofa', '2-step verification', 'e.g. Authenticator on my phone']],
+    secrets: ['backupCodes', 'totp'],
+    expense: 'Software',
+  },
+  email: {
+    label: 'Email account', plural: 'Email', icon: 'mail', color: '#be185d',
+    provider: 'Email provider', providerPh: 'e.g. Gmail, Outlook, Zoho Mail, Proton', login: 'Email address',
+    secretLabel: 'Password',
+    fields: [['email', 'Recovery email', ''], ['phone', 'Recovery phone', ''],
+      ['twofa', '2-step verification', 'e.g. Authenticator app, SMS to my phone'], ['server', 'IMAP / SMTP server', 'e.g. imap.gmail.com · smtp.gmail.com']],
+    secrets: ['backupCodes', 'totp', 'appPassword', 'securityQa'],
     expense: 'Software',
   },
   payment: {
@@ -51,6 +62,17 @@ const ASSET_CATEGORIES = {
   },
 };
 const ASSET_STATUS = { active: 'Active', inactive: 'Not in use', closed: 'Closed / cancelled' };
+
+// secrets besides the password, saved encrypted like it (a category lists the ones its form offers)
+const SECRET_FIELDS = {
+  backupCodes: { label: 'Backup codes', multiline: true, ph: 'One code per line' },
+  totp: { label: '2-step setup key', ph: 'Setup key or otpauth:// link',
+    help: 'The key shown when you turn on 2-step verification (under the QR code). The app then shows the 6-digit codes.' },
+  appPassword: { label: 'App password', ph: 'For mail apps (IMAP / SMTP)' },
+  securityQa: { label: 'Security questions & answers', multiline: true, ph: 'Question — answer, one per line' },
+};
+const MASK = '••••••••••';
+const CODE_MASK = '••• •••';
 
 const as = { selectedId: null, query: '', filter: 'all' };
 
@@ -154,6 +176,27 @@ function fieldRowHtml(label, value, { copy = true, href = '', mono = false } = {
     </div>`;
 }
 
+/** The extra secrets saved for an asset, in the order its form shows them. */
+function secretNames(a) {
+  const order = Object.keys(SECRET_FIELDS);
+  return [...(a.secrets || [])].sort((x, y) => order.indexOf(x) - order.indexOf(y));
+}
+
+function secretRowHtml(name) {
+  const f = SECRET_FIELDS[name] || { label: name };
+  const isCode = name === 'totp';
+  return `
+    <div class="kv">
+      <span class="k">${esc(isCode ? '2-step code' : f.label)}</span>
+      <span class="v mono secret ${f.multiline ? 'multi' : ''}" id="asSecret-${esc(name)}">${isCode ? CODE_MASK : MASK}</span>
+      <span class="kv-actions">
+        <button type="button" class="icon-btn tiny" data-as="reveal" data-secret="${esc(name)}" title="${isCode ? 'Show the current code' : 'Show for 20 seconds'}">${icon('eye', 15)}</button>
+        <button type="button" class="icon-btn tiny" data-as="copy-secret" data-secret="${esc(name)}" title="${isCode ? 'Copy the current code' : 'Copy'} (cleared from the clipboard after 30 s)">${icon('copy', 15)}</button>
+        ${isCode ? `<button type="button" class="icon-btn tiny" data-as="reveal-key" title="Show the setup key for 20 seconds (to add it to another authenticator)">${icon('account', 15)}</button>` : ''}
+      </span>
+    </div>`;
+}
+
 function renderAssetDetail() {
   const el = $('#asDetail');
   const a = byId('asset', as.selectedId);
@@ -212,16 +255,17 @@ function renderAssetDetail() {
             ${fieldRowHtml(cat.login, a.login)}
             ${a.hasSecret ? `
               <div class="kv">
-                <span class="k">Password / key</span>
+                <span class="k">${esc(cat.secretLabel || 'Password / key')}</span>
                 <span class="v mono secret" id="asSecret">••••••••••</span>
                 <span class="kv-actions">
                   <button type="button" class="icon-btn tiny" data-as="reveal" title="Show for 20 seconds">${icon('eye', 15)}</button>
                   <button type="button" class="icon-btn tiny" data-as="copy-secret" title="Copy (cleared from the clipboard after 30 s)">${icon('copy', 15)}</button>
                 </span>
               </div>` : ''}
+            ${secretNames(a).map((name) => secretRowHtml(name)).join('')}
             ${cat.fields.map(([key, label]) => fieldRowHtml(label, d[key], { mono: ['ip', 'iban', 'accountNumber', 'swift', 'routing', 'licenseKey', 'nameservers'].includes(key) })).join('')}
           </div>
-          ${!a.url && !a.login && !a.hasSecret && !cat.fields.some(([k]) => d[k]) ? '<div class="box-empty">No access details saved.</div>' : ''}
+          ${!a.url && !a.login && !a.hasSecret && !a.secrets.length && !cat.fields.some(([k]) => d[k]) ? '<div class="box-empty">No access details saved.</div>' : ''}
         </section>
 
         <section class="box">
@@ -270,34 +314,97 @@ function apiError(err) {
   return String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 }
 
-let secretTimer = null;
-async function revealAssetSecret(a) {
+const secretTimers = {};
+const secretEl = (name) => $(name === 'password' ? '#asSecret' : `#asSecret-${CSS.escape(name)}`);
+
+/** Show text in a secret's row, and hide it again after ms. */
+function showSecretText(name, text, ms) {
+  const el = secretEl(name);
+  if (!el) return;
+  el.textContent = text;
+  el.classList.add('shown');
+  clearTimeout(secretTimers[name]);
+  secretTimers[name] = setTimeout(() => {
+    const e = secretEl(name);
+    if (!e) return;
+    e.textContent = name === 'totp' ? CODE_MASK : MASK;
+    e.classList.remove('shown');
+  }, ms);
+}
+
+async function revealAssetSecret(a, name = 'password') {
   let value;
   try {
-    value = await window.api.revealSecret(a.id);
+    value = await window.api.revealSecret(a.id, name);
   } catch (err) {
     toast(apiError(err));
     return;
   }
-  const el = $('#asSecret');
-  if (!el || value === null) return;
-  el.textContent = value;
-  el.classList.add('shown');
-  clearTimeout(secretTimer);
-  secretTimer = setTimeout(() => {
-    if ($('#asSecret')) {
-      $('#asSecret').textContent = '••••••••••';
-      $('#asSecret').classList.remove('shown');
-    }
-  }, 20000);
+  if (value !== null) showSecretText(name, value, 20000);
 }
 
-async function copyAssetSecret(a) {
+/** The current 2-step code with its countdown, kept up to date for two minutes. */
+async function showAssetCode(a) {
+  const until = Date.now() + 120000;
+  let c = null;
+  let fetchedAt = 0;
+  const tick = async () => {
+    if (as.selectedId !== a.id || !secretEl('totp')) return;
+    const left = c ? c.remaining - Math.floor((Date.now() - fetchedAt) / 1000) : 0;
+    if (left <= 0) {
+      try {
+        c = await window.api.secretCode(a.id);
+      } catch (err) {
+        toast(apiError(err));
+        return;
+      }
+      if (!c) return;
+      fetchedAt = Date.now();
+      tick();
+      return;
+    }
+    const half = Math.ceil(c.code.length / 2);
+    showSecretText('totp', `${c.code.slice(0, half)} ${c.code.slice(half)} · ${left}s`, Math.max(1000, until - Date.now()));
+    if (Date.now() < until) secretTimers.totpTick = setTimeout(tick, 1000);
+  };
+  clearTimeout(secretTimers.totpTick);
+  tick();
+}
+
+async function copyAssetSecret(a, name = 'password') {
+  const what = name === 'password' ? 'Password' : name === 'totp' ? '2-step code' : (SECRET_FIELDS[name]?.label || 'Secret');
   try {
-    if (await window.api.copySecret(a.id)) toast('Password copied — it is cleared from the clipboard in 30 seconds');
+    if (await window.api.copySecret(a.id, name)) toast(`${what} copied — it is cleared from the clipboard in 30 seconds`);
   } catch (err) {
     toast(apiError(err));
   }
+}
+
+function looksLikeTotpKey(text) {
+  const s = text.trim();
+  return /^otpauth:\/\//i.test(s) || /^[A-Z2-7]{16,}=*$/i.test(s.replace(/[\s-]/g, ''));
+}
+
+/** Inputs for the extra secrets: the category's own plus any already saved. */
+function secretFieldsHtml(category, saved) {
+  const names = [...new Set([...(ASSET_CATEGORIES[category].secrets || []), ...saved])];
+  return names.map((name) => {
+    const f = SECRET_FIELDS[name] || { label: name };
+    const has = saved.includes(name);
+    const ph = has ? '•••••••• saved — type to replace' : (f.ph || 'Encrypted with your Windows account');
+    const attrs = `id="as-${esc(name)}" data-secret="${esc(name)}" spellcheck="false" placeholder="${esc(ph)}"`;
+    return `
+      <div class="field">
+        <label for="as-${esc(name)}">${esc(f.label)}</label>
+        <div class="secret-input ${f.multiline ? 'multi' : ''}">
+          ${f.multiline ? `<textarea ${attrs} class="masked" rows="3"></textarea>` : `<input ${attrs} type="password" autocomplete="new-password">`}
+          <button type="button" class="icon-btn tiny" data-show="${esc(name)}" title="Show while typing">${icon('eye', 15)}</button>
+        </div>
+        ${f.help ? `<div class="help">${esc(f.help)}</div>` : ''}
+        <div class="error hidden" id="as-${esc(name)}-err">${name === 'totp' ? 'That isn’t a setup key. It is letters A–Z and digits 2–7 (spaces are fine), or an otpauth:// link.' : ''}</div>
+        ${has ? `<label class="check small"><input type="checkbox" data-remove="${esc(name)}"> Remove the saved ${esc(f.label.toLowerCase())}</label>` : ''}
+      </div>`;
+  }).join('');
 }
 
 function detailFieldsHtml(category, details) {
@@ -315,8 +422,9 @@ function detailFieldsHtml(category, details) {
 function openAssetModal(existing = null, preset = {}) {
   const a = existing || {
     category: as.filter !== 'all' ? as.filter : 'server', status: 'active', billing: 'monthly',
-    currency: lastCurrency(), details: {}, cost: null, balance: null, ...preset,
+    currency: lastCurrency(), details: {}, cost: null, balance: null, secrets: [], ...preset,
   };
+  const savedSecrets = existing ? [...(existing.secrets || [])] : [];
   const id = existing ? existing.id : uid();
   let details = { ...(a.details || {}) };
   openModal({
@@ -344,7 +452,7 @@ function openAssetModal(existing = null, preset = {}) {
       <div class="field-row">
         <div class="field"><label for="a-login" id="a-login-label"></label><input id="a-login" value="${esc(a.login)}" spellcheck="false" autocomplete="off"></div>
         <div class="field">
-          <label for="a-secret">Password / API key</label>
+          <label for="a-secret" id="a-secret-label">Password / API key</label>
           <div class="secret-input">
             <input id="a-secret" type="password" autocomplete="new-password" spellcheck="false"
               placeholder="${existing?.hasSecret ? '•••••••• saved — type to replace' : 'Encrypted with your Windows account'}">
@@ -354,6 +462,7 @@ function openAssetModal(existing = null, preset = {}) {
         </div>
       </div>
       <div id="a-details">${detailFieldsHtml(a.category, details)}</div>
+      <div id="a-secrets">${secretFieldsHtml(a.category, savedSecrets)}</div>
       <div class="field-row">
         <div class="field"><label for="a-cost">Cost</label>
           <div class="money-input">
@@ -386,13 +495,28 @@ function openAssetModal(existing = null, preset = {}) {
         $('#a-provider-label').textContent = cat.provider;
         $('#a-provider').placeholder = cat.providerPh;
         $('#a-login-label').textContent = cat.login;
+        $('#a-secret-label').textContent = cat.secretLabel || 'Password / API key';
         $('#a-balance-field').classList.toggle('invisible', !cat.balance);
       };
       $('#a-cat').addEventListener('change', () => {
         // keep what was typed in fields the new type shares
         for (const input of $$('#a-details [data-detail]')) details[input.dataset.detail] = input.value;
         $('#a-details').innerHTML = detailFieldsHtml($('#a-cat').value, details);
+        const typed = Object.fromEntries($$('#a-secrets [data-secret]').map((i) => [i.dataset.secret, i.value]));
+        $('#a-secrets').innerHTML = secretFieldsHtml($('#a-cat').value, savedSecrets);
+        for (const i of $$('#a-secrets [data-secret]')) i.value = typed[i.dataset.secret] || '';
         update();
+      });
+      $('#a-secrets').addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-show]');
+        if (!btn) return;
+        const field = $(`#as-${CSS.escape(btn.dataset.show)}`);
+        if (field.tagName === 'TEXTAREA') field.classList.toggle('masked');
+        else field.type = field.type === 'password' ? 'text' : 'password';
+      });
+      $('#a-secrets').addEventListener('change', (e) => {
+        const name = e.target.dataset.remove;
+        if (name) $(`#as-${CSS.escape(name)}`).disabled = e.target.checked;
       });
       $('#a-secret-show').addEventListener('click', () => {
         const s = $('#a-secret');
@@ -431,6 +555,11 @@ function openAssetModal(existing = null, preset = {}) {
       if (!data.name) { $('#a-name').focus(); return false; }
       if (Number.isNaN(cost)) { $('#a-cost').focus(); return false; }
       if (Number.isNaN(balance)) { $('#a-balance').focus(); return false; }
+      // the main process checks the 2-step key properly; catch obvious mistakes before anything is saved
+      const key = $('#as-totp');
+      const badKey = !!key && !key.disabled && !!key.value.trim() && !looksLikeTotpKey(key.value);
+      $('#as-totp-err')?.classList.toggle('hidden', !badKey);
+      if (badKey) { key.focus(); return false; }
       const secret = $('#a-secret').value;
       const removeSecret = $('#a-secret-remove')?.checked;
       let stored;
@@ -438,6 +567,15 @@ function openAssetModal(existing = null, preset = {}) {
         stored = await saveRec('asset', { ...(existing || {}), id, ...data });
         if (removeSecret || secret) {
           stored.hasSecret = await dbCall('setAssetSecret', id, removeSecret ? null : secret);
+        }
+        for (const input of $$('#a-secrets [data-secret]')) {
+          const name = input.dataset.secret;
+          const remove = $(`#a-secrets [data-remove="${CSS.escape(name)}"]`)?.checked;
+          const value = input.value.trim();
+          if (!remove && !value) continue;
+          const kept = await dbCall('setAssetSecret', id, remove ? null : value, name);
+          stored.secrets = [...(stored.secrets || []).filter((n) => n !== name), ...(kept ? [name] : [])];
+          savedSecrets.splice(0, savedSecrets.length, ...stored.secrets);
         }
       } catch {
         return false;
@@ -572,8 +710,13 @@ registerView({
       else if (action === 'delete') {
         if (as.selectedId === a.id) as.selectedId = null;
         deleteRec('asset', a, a.name);
-      } else if (action === 'reveal') revealAssetSecret(a);
-      else if (action === 'copy-secret') copyAssetSecret(a);
+      } else if (action === 'reveal') {
+        if (btn.dataset.secret === 'totp') showAssetCode(a);
+        else revealAssetSecret(a, btn.dataset.secret || 'password');
+      } else if (action === 'reveal-key') {
+        clearTimeout(secretTimers.totpTick);
+        revealAssetSecret(a, 'totp');
+      } else if (action === 'copy-secret') copyAssetSecret(a, btn.dataset.secret || 'password');
       else if (action === 'balance') updateBalanceDialog(a);
       else if (action === 'pay') logAssetPayment(a);
       else if (action === 'all-tx') showFinanceFor({ assetId: a.id });

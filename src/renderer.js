@@ -1416,10 +1416,12 @@ async function deleteMessage(msg) {
 
 function openSettings({ focusClock = false, focusMoney = false } = {}) {
   let startup = null; // { supported, enabled, minimized } from the main process
+  let readAppearance = null;
   const s = state.db.settings;
   openModal({
     title: 'Settings',
     body: `
+      ${appearanceFieldHtml()}
       <div class="field">
         <label>Your LinkedIn accounts</label>
         <div class="settings-accounts">
@@ -1480,6 +1482,7 @@ function openSettings({ focusClock = false, focusMoney = false } = {}) {
     okText: 'Save',
     onOpen() {
       $('#s-accounts').addEventListener('click', () => { closeModal(); showView('linkedin'); openAccountsManager(); });
+      readAppearance = setupAppearanceField();
       setupRatesEditor();
       const preview = () => { $('#s-clock-preview').innerHTML = clockPreviewHtml($('#s-clock').value); };
       $('#s-clock').addEventListener('change', preview);
@@ -1535,6 +1538,12 @@ function openSettings({ focusClock = false, focusMoney = false } = {}) {
         await dbCall('setSetting', 'baseCurrency', currency);
         await dbCall('setSetting', 'fxRates', rates);
       } catch {
+        return false;
+      }
+      try {
+        saveAppearance(readAppearance());
+      } catch {
+        toast('That background picture is too large to keep. Choose a smaller one.');
         return false;
       }
       const clockChanged = timeZone !== clock.setting;

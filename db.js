@@ -15,7 +15,7 @@ const path = require('path');
 const cryptfile = require('./cryptfile');
 const { countryFromLegacyValue } = require('./src/countries');
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const PURGE_DELETED_AFTER_DAYS = 30;
 
 let db = null;
@@ -343,7 +343,23 @@ function migrate() {
           deleted_at   TEXT
         );
       `);
-      db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+      db.exec('PRAGMA user_version = 6');
+    });
+  }
+  if (version < 7) {
+    // more than one secret per asset (email accounts: backup codes, 2-step key, security answer);
+    // the password / API key stays in assets.secret. Encrypted like it, by Windows (DPAPI).
+    tx(() => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS asset_secrets (
+          asset_id    TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          name        TEXT NOT NULL,
+          secret      BLOB NOT NULL,
+          updated_at  TEXT NOT NULL,
+          PRIMARY KEY (asset_id, name)
+        );
+      `);
+      db.exec('PRAGMA user_version = 7');
     });
   }
 }
@@ -702,7 +718,7 @@ const ENTITIES = {
     table: 'assets',
     key: 'assets',
     fields: {
-      category: oneOf('server', 'domain', 'account', 'payment', 'bank', 'software', 'other'),
+      category: oneOf('server', 'domain', 'account', 'email', 'payment', 'bank', 'software', 'other'),
       name: text(500, true),
       provider: text(500),
       url: text(2000),
@@ -843,14 +859,20 @@ function rowToRecord(spec, r) {
   }
   rec.createdAt = r.created_at;
   rec.updatedAt = r.updated_at;
-  if (spec.table === 'assets') rec.hasSecret = !!r.has_secret;
+  if (spec.table === 'assets') {
+    rec.hasSecret = !!r.has_secret;
+    rec.secrets = r.secret_names ? r.secret_names.split(',') : []; // names of the extra secrets saved
+  }
   if (spec.table === 'tasks') rec.doneAt = r.done_at || null;
   if (spec.table === 'customers') rec.avatarVersion = r.avatar_updated_at || null;
   return rec;
 }
 
 function selectSql(spec) {
-  if (spec.table === 'assets') return 'SELECT t.*, t.secret IS NOT NULL AS has_secret FROM assets t';
+  if (spec.table === 'assets') {
+    return `SELECT t.*, t.secret IS NOT NULL AS has_secret,
+      (SELECT group_concat(s.name) FROM asset_secrets s WHERE s.asset_id = t.id) AS secret_names FROM assets t`;
+  }
   if (spec.table === 'customers') {
     return 'SELECT t.*, a.updated_at AS avatar_updated_at FROM customers t LEFT JOIN avatars a ON a.owner_id = t.id';
   }
@@ -904,15 +926,37 @@ function restoreRecord(type, id) {
   return getRecord(type, id);
 }
 
+/** Secret names: 'password' (assets.secret) or an extra one such as 'backupCodes' or 'totp'. */
+function secretName(name) {
+  const n = String(name || 'password');
+  if (!/^[a-zA-Z]{1,40}$/.test(n)) throw new Error('Invalid secret name');
+  return n;
+}
+
 /** encrypted: Buffer from vault.protect() (Windows DPAPI), or null to remove. */
-function setAssetSecret(id, encrypted) {
-  db.prepare('UPDATE assets SET secret = ?, updated_at = ? WHERE id = ?')
-    .run(encrypted ? Buffer.from(encrypted) : null, now(), str(id, 200));
+function setAssetSecret(id, encrypted, name = 'password') {
+  const n = secretName(name);
+  const t = now();
+  if (n === 'password') {
+    db.prepare('UPDATE assets SET secret = ?, updated_at = ? WHERE id = ?').run(encrypted ? Buffer.from(encrypted) : null, t, str(id, 200));
+    return !!encrypted;
+  }
+  if (encrypted) {
+    db.prepare(`INSERT INTO asset_secrets (asset_id, name, secret, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT (asset_id, name) DO UPDATE SET secret = excluded.secret, updated_at = excluded.updated_at`)
+      .run(str(id, 200), n, Buffer.from(encrypted), t);
+  } else {
+    db.prepare('DELETE FROM asset_secrets WHERE asset_id = ? AND name = ?').run(str(id, 200), n);
+  }
+  db.prepare('UPDATE assets SET updated_at = ? WHERE id = ?').run(t, str(id, 200));
   return !!encrypted;
 }
 
-function getAssetSecret(id) {
-  const r = db.prepare('SELECT secret FROM assets WHERE id = ?').get(str(id, 200));
+function getAssetSecret(id, name = 'password') {
+  const n = secretName(name);
+  const r = n === 'password'
+    ? db.prepare('SELECT secret FROM assets WHERE id = ?').get(str(id, 200))
+    : db.prepare('SELECT secret FROM asset_secrets WHERE asset_id = ? AND name = ?').get(str(id, 200), n);
   return r && r.secret ? Buffer.from(r.secret) : null;
 }
 
@@ -1029,9 +1073,11 @@ function exportJson() {
     },
     customers: data.customers.map(({ avatarVersion, ...c }) => ({ ...c, avatar: avatarVersion ? avatarFor(c.id) : undefined })),
     // passwords stay encrypted: they can only be read back by the same Windows user
-    assets: data.assets.map(({ hasSecret, ...a }) => {
+    assets: data.assets.map(({ hasSecret, secrets, ...a }) => {
       const secret = hasSecret ? getAssetSecret(a.id) : null;
-      return { ...a, secretEnc: secret ? secret.toString('base64') : undefined };
+      const extra = Object.fromEntries(secrets.map((n) => [n, getAssetSecret(a.id, n)?.toString('base64')]).filter(([, v]) => v));
+      return { ...a, secretEnc: secret ? secret.toString('base64') : undefined,
+        secretsEnc: secrets.length ? extra : undefined };
     }),
     transactions: data.transactions,
     goals: data.goals,
@@ -1157,6 +1203,11 @@ function importJson(obj, mode = 'replace') {
         }
         if (type === 'asset' && typeof rec.secretEnc === 'string' && rec.secretEnc) {
           setAssetSecret(rec.id, Buffer.from(rec.secretEnc, 'base64'));
+        }
+        if (type === 'asset' && rec.secretsEnc && typeof rec.secretsEnc === 'object') {
+          for (const [n, v] of Object.entries(rec.secretsEnc)) {
+            if (typeof v === 'string' && v && /^[a-zA-Z]{1,40}$/.test(n)) setAssetSecret(rec.id, Buffer.from(v, 'base64'), n);
+          }
         }
       }
     }

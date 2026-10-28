@@ -217,7 +217,7 @@ function niceMax(v) {
 
 function drawGrowthChart(el, months) {
   if (!months.some((m) => m.income || m.expense)) {
-    el.innerHTML = '<div class="chart-empty">Log income and expenses in <a class="url-link" data-open="view:finance">Finance</a> to see how your business grows month by month.</div>';
+    el.innerHTML = '<div class="chart-empty"><span>Log income and expenses in <a class="url-link" data-open="view:finance">Finance</a> to see how your business grows month by month.</span></div>';
     return;
   }
   const W = Math.max(320, el.clientWidth);
