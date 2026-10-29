@@ -224,7 +224,7 @@ function assetMiniRowHtml(a) {
   const cat = ASSET_CATEGORIES[a.category];
   return `
     <button type="button" class="mini-row" data-open="asset:${esc(a.id)}">
-      <span class="cat-icon sm" style="--cat:${cat.color}">${icon(cat.icon, 14)}</span>
+      ${catIconHtml(a.category, 'sm')}
       <span class="mini-text">${esc(a.name)}<small>${esc(cat.label)}</small></span>
       ${a.cost ? `<span class="mini-date">${esc(fmtMoney(a.cost, a.currency || baseCurrency()))}${esc(BILLING[a.billing].per)}</span>` : ''}
     </button>`;

@@ -42,6 +42,8 @@ const ICONS = {
   eye: 'M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5ZM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10Zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z',
   open: 'M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2v-7h-2v7ZM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7Z',
   check: 'M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17Z',
+  // GitHub's mark (Octicons mark-github), drawn on a 16-unit grid
+  github: { box: 16, d: 'M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z' },
   mail: 'M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2Zm0 4-8 5-8-5V6l8 5 8-5v2Z',
   cash: 'M19 14V6c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2Zm-9-1c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3Zm13-6v11c0 1.1-.9 2-2 2H4v-2h17V7h2Z',
   receipt: 'M18 17H6v-2h12v2Zm0-4H6v-2h12v2Zm0-4H6V7h12v2ZM3 22l1.5-1.5L6 22l1.5-1.5L9 22l1.5-1.5L12 22l1.5-1.5L15 22l1.5-1.5L18 22l1.5-1.5L21 22V2l-1.5 1.5L18 2l-1.5 1.5L15 2l-1.5 1.5L12 2l-1.5 1.5L9 2 7.5 3.5 6 2 4.5 3.5 3 2v20Z',
@@ -56,7 +58,8 @@ function kpiIcon(name, tone) {
 }
 
 function icon(name, size = 20) {
-  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true"><path fill="currentColor" d="${ICONS[name]}"/></svg>`;
+  const { d, box = 24 } = typeof ICONS[name] === 'string' ? { d: ICONS[name] } : ICONS[name];
+  return `<svg viewBox="0 0 ${box} ${box}" width="${size}" height="${size}" aria-hidden="true"><path fill="currentColor" d="${d}"/></svg>`;
 }
 
 // ---------- navigation ----------
@@ -350,6 +353,21 @@ async function deleteRec(type, rec, label) {
   return true;
 }
 
+/** Ask first, then delete with Undo. what names the kind of record ("asset"); note is optional HTML. */
+function confirmDeleteRec(type, rec, label, { what, note = '', before } = {}) {
+  openModal({
+    title: `Delete ${what}?`,
+    body: `<p>This removes <strong>${esc(label)}</strong>.</p>${note ? `<p class="help">${note}</p>` : ''}`,
+    okText: 'Delete',
+    danger: true,
+    async onOk() {
+      before?.();
+      await deleteRec(type, rec, label);
+      return true;
+    },
+  });
+}
+
 // ---------- small UI helpers ----------
 
 function opt(value, label, selected) {
@@ -438,23 +456,64 @@ function ratesRowsHtml(base, rates, extra = []) {
     </div>`).join('');
 }
 
+/**
+ * Rates against `from` restated against `to`: 1 X = r from  →  1 X = r / rate(to) to, and `from`
+ * itself becomes 1 / rate(to). Null when `to` has no rate, so nothing can be worked out.
+ */
+function rebaseRates(rates, from, to) {
+  const r = rates[to];
+  if (!(r > 0)) return null;
+  const round = (n) => Number(n.toPrecision(6));
+  const out = { [from]: round(1 / r) };
+  for (const [c, v] of Object.entries(rates)) if (c !== to && c !== from) out[c] = round(v / r);
+  return out;
+}
+
+/**
+ * The rates editor of Settings. Rates are stated in the main currency, so when the main currency
+ * is changed they are restated in the new one (or cleared, when there is no rate to convert with).
+ * Returns a function that applies a changed main currency; call it before reading the rates.
+ */
 function setupRatesEditor() {
-  let extra = [];
+  const extra = [];
+  let base = baseCurrency();
+  let rates = { ...(state.db.settings.fxRates || {}) };
   const draw = () => {
-    const base = cleanCurrency($('#s-currency').value) || 'USD';
-    const rates = { ...(state.db.settings.fxRates || {}), ...readRates() };
-    $('#s-rates').innerHTML = ratesRowsHtml(base, rates, extra);
+    $('#s-rates').innerHTML = ratesRowsHtml(base, rates, [...extra, ...Object.keys(rates)]);
   };
-  $('#s-currency').addEventListener('change', draw);
+  // what is typed in the rate inputs (an emptied input removes that rate)
+  const takeInputs = () => {
+    for (const input of $$('#s-rates [data-rate]')) {
+      const n = parseAmount(input.value);
+      if (n > 0) rates[input.dataset.rate] = n;
+      else delete rates[input.dataset.rate];
+    }
+  };
+  const applyCurrency = () => {
+    const next = cleanCurrency($('#s-currency').value);
+    if (!/^[A-Z0-9]{2,6}$/.test(next) || next === base) return;
+    takeInputs();
+    const rebased = rebaseRates(rates, base, next);
+    $('#s-rates-note').textContent = rebased
+      ? `The rates were converted from ${base} to ${next}. Check them before saving.`
+      : `The rates were in ${base}, and there is no ${next} rate to convert them with, so enter them again in ${next}.`;
+    $('#s-rates-note').classList.remove('hidden');
+    rates = rebased || {};
+    base = next;
+    draw();
+  };
+  $('#s-currency').addEventListener('change', applyCurrency);
   $('#s-rate-add').addEventListener('click', () => {
     const c = cleanCurrency($('#s-rate-new').value);
     if (!/^[A-Z0-9]{2,6}$/.test(c)) { $('#s-rate-new').focus(); return; }
+    takeInputs();
     extra.push(c);
     $('#s-rate-new').value = '';
     draw();
     $(`[data-rate="${CSS.escape(c)}"]`)?.focus();
   });
   draw();
+  return applyCurrency;
 }
 
 /** { EUR: 1.08, … } from the rates editor (empty or invalid inputs are left out). */

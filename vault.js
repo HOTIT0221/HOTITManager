@@ -47,4 +47,38 @@ async function unprotect(blob) {
   }
 }
 
-module.exports = { protect, unprotect };
+/**
+ * Many values in one PowerShell call (starting PowerShell takes most of the time).
+ * method 'Protect' | 'Unprotect'; returns a Buffer per input, or null where that one failed.
+ */
+function dpapiMany(method, inputs) {
+  if (!inputs.length) return Promise.resolve([]);
+  const script = [
+    'Add-Type -AssemblyName System.Security',
+    `$e = [Text.Encoding]::UTF8.GetBytes('${ENTROPY}')`,
+    "foreach ($l in ([Console]::In.ReadToEnd() -split '\\n')) { $l = $l.Trim(); if (-not $l) { continue }; " +
+      `try { $out = [Security.Cryptography.ProtectedData]::${method}([Convert]::FromBase64String($l), $e, 'CurrentUser'); ` +
+      '[Console]::Out.WriteLine([Convert]::ToBase64String($out)) } catch { [Console]::Out.WriteLine(\'-\') } }',
+  ].join('; ');
+  return new Promise((resolve, reject) => {
+    const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      { windowsHide: true, timeout: 120000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => {
+        if (err) return reject(err);
+        const lines = stdout.split(/\r?\n/);
+        resolve(inputs.map((_v, i) => (lines[i] && lines[i] !== '-' ? Buffer.from(lines[i], 'base64') : null)));
+      });
+    child.stdin.end(inputs.map((v) => Buffer.from(v).toString('base64')).join('\n'));
+  });
+}
+
+/** protect() for many texts at once: an encrypted Buffer (or null) per text. */
+function protectMany(texts) {
+  return dpapiMany('Protect', texts.map((t) => Buffer.from(String(t), 'utf8')));
+}
+
+/** unprotect() for many values at once: the text, or null where it can't be read here. */
+async function unprotectMany(blobs) {
+  return (await dpapiMany('Unprotect', blobs)).map((b) => (b ? b.toString('utf8') : null));
+}
+
+module.exports = { protect, unprotect, protectMany, unprotectMany };

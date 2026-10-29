@@ -217,8 +217,7 @@ function openGoalModal(existing = null) {
       $('#g-metric').addEventListener('change', update);
       update();
       $('#g-delete')?.addEventListener('click', () => {
-        closeModal();
-        deleteRec('goal', existing, existing.title);
+        confirmDeleteRec('goal', existing, existing.title, { what: 'goal' });
       });
       $('#g-title').focus();
     },
@@ -317,8 +316,7 @@ function openTaskModal(existing = null, preset = {}) {
     okText: existing ? 'Save' : 'Add task',
     onOpen() {
       $('#k-delete')?.addEventListener('click', () => {
-        closeModal();
-        deleteRec('task', existing, existing.title);
+        confirmDeleteRec('task', existing, existing.title, { what: 'task' });
       });
       $('#k-title').focus();
     },

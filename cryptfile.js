@@ -186,7 +186,39 @@ function encryptTo(file, header, key, plain) {
   writeFileAtomic(file, encryptBuffer(header, key, plain));
 }
 
+// ---------- secrets inside an encrypted database ----------
+//
+// Passwords, 2-step keys etc. saved on assets are encrypted once more on their own, with a key
+// derived from the database's data key. So they open wherever the database opens (any PC, with
+// the password), and stay encrypted even in the decrypted copy of the database the app keeps in memory.
+// Layout: "ITBM-SK1" | IV (12) | tag (16) | ciphertext. `aad` ties a value to its asset and name.
+
+const SECRET_MAGIC = Buffer.from('ITBM-SK1');
+
+function secretKey(dataKey) {
+  return Buffer.from(crypto.hkdfSync('sha256', dataKey, Buffer.alloc(0), 'ITBM asset secrets v1', 32));
+}
+
+function isSealedSecret(blob) {
+  const b = Buffer.from(blob);
+  return b.length >= SECRET_MAGIC.length + 28 && b.subarray(0, SECRET_MAGIC.length).equals(SECRET_MAGIC);
+}
+
+/** Encrypt a secret with the database's data key. */
+function sealSecret(dataKey, text, aad) {
+  const s = seal(secretKey(dataKey), Buffer.from(String(text), 'utf8'), aad);
+  return Buffer.concat([SECRET_MAGIC, s.iv, s.tag, s.data]);
+}
+
+/** Decrypt a value made by sealSecret(); throws if it was made with another database's key. */
+function openSecret(dataKey, blob, aad) {
+  const b = Buffer.from(blob);
+  const at = SECRET_MAGIC.length;
+  return open(secretKey(dataKey), { iv: b.subarray(at, at + 12), tag: b.subarray(at + 12, at + 28), data: b.subarray(at + 28) }, aad)
+    .toString('utf8');
+}
+
 module.exports = {
   WrongPasswordError, create, rewrap, unlock, isEncrypted, isPlainSqlite, readHeader,
-  decryptFile, encryptTo, writeFileAtomic,
+  decryptFile, encryptTo, writeFileAtomic, isSealedSecret, sealSecret, openSecret,
 };

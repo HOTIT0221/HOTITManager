@@ -332,7 +332,7 @@ registerView({
       const del = e.target.closest('[data-del]');
       if (del) {
         const t = byId('transaction', del.dataset.del);
-        if (t) deleteRec('transaction', t, txLabel(t));
+        if (t) confirmDeleteRec('transaction', t, txLabel(t), { what: 'transaction' });
         return;
       }
       if (e.target.closest('a, [data-open]')) return;

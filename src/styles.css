@@ -1354,6 +1354,7 @@ button.kpi[data-open]:hover { border-color: var(--hover-border); box-shadow: 0 4
 .rate-row span:first-child { width: 80px; text-align: right; color: var(--text-2); }
 .field .rate-row input { width: 130px; }
 .rate-missing { color: var(--amber); font-size: 12px; font-weight: 600; }
+.field .help.warn { color: var(--amber); font-weight: 600; }
 .rate-add { display: flex; gap: 8px; align-items: center; }
 .danger-text { color: var(--red) !important; }
 .segmented.money-type button { padding: 5px 22px; }
@@ -1492,6 +1493,9 @@ button.kpi[data-open]:hover { border-color: var(--hover-border); box-shadow: 0 4
 .lock-card .help { color: var(--text-3); font-size: 12px; margin: 0; }
 
 .modal-text { margin: 0 0 14px; line-height: 1.5; }
+.leftover-list { margin: 0 0 12px; padding-left: 20px; }
+.leftover-list li { margin: 4px 0; }
+.leftover-list code { word-break: break-all; user-select: text; }
 .security-state { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .security-state .help { margin-top: 0; }
 .sec-badge {
@@ -1550,6 +1554,9 @@ button.kpi[data-open]:hover { border-color: var(--hover-border); box-shadow: 0 4
   --focus: 0 0 0 3px rgba(110, 162, 255, 0.3);
 }
 :root[data-theme="dark"] .cat-icon { color: color-mix(in srgb, var(--cat) 60%, #fff); background: color-mix(in srgb, var(--cat) 24%, var(--card)); }
+/* GitHub: white mark on GitHub's near-black, as GitHub shows it */
+.cat-icon.cat-github, :root[data-theme="dark"] .cat-icon.cat-github { color: #fff; background: #1f2328; }
+:root[data-theme="dark"] .cat-icon.cat-github { background: #30363d; }
 :root[data-theme="dark"] dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 :root[data-theme="dark"] .chart-tip, :root[data-theme="dark"] .account-menu { border-color: var(--line-strong); }
 

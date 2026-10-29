@@ -1417,6 +1417,7 @@ async function deleteMessage(msg) {
 function openSettings({ focusClock = false, focusMoney = false } = {}) {
   let startup = null; // { supported, enabled, minimized } from the main process
   let readAppearance = null;
+  let applyCurrency = null; // restates the exchange rates when the main currency was changed
   const s = state.db.settings;
   openModal({
     title: 'Settings',
@@ -1445,6 +1446,7 @@ function openSettings({ focusClock = false, focusMoney = false } = {}) {
       <div class="field">
         <label>Exchange rates</label>
         <div class="rates" id="s-rates"></div>
+        <div class="help warn hidden" id="s-rates-note"></div>
         <div class="rate-add">
           <input id="s-rate-new" class="currency-input" list="currencyList" placeholder="e.g. EUR" maxlength="6" autocomplete="off">
           <button type="button" class="btn ghost small" id="s-rate-add">Add currency</button>
@@ -1483,7 +1485,7 @@ function openSettings({ focusClock = false, focusMoney = false } = {}) {
     onOpen() {
       $('#s-accounts').addEventListener('click', () => { closeModal(); showView('linkedin'); openAccountsManager(); });
       readAppearance = setupAppearanceField();
-      setupRatesEditor();
+      applyCurrency = setupRatesEditor();
       const preview = () => { $('#s-clock-preview').innerHTML = clockPreviewHtml($('#s-clock').value); };
       $('#s-clock').addEventListener('change', preview);
       preview();
@@ -1531,6 +1533,7 @@ function openSettings({ focusClock = false, focusMoney = false } = {}) {
         toast('Please enter a currency code such as USD or EUR.');
         return false;
       }
+      applyCurrency(); // (in case Save was pressed straight after typing it)
       const rates = readRates();
       delete rates[currency];
       try {
@@ -2052,7 +2055,16 @@ function bindEvents() {
         toggleSeen(msg);
         break;
       case 'delete-msg':
-        deleteMessage(msg);
+        openModal({
+          title: 'Delete message?',
+          body: `<p>This removes the message: <strong>${esc(messagePreview(msg))}</strong></p>`,
+          okText: 'Delete',
+          danger: true,
+          async onOk() {
+            await deleteMessage(msg);
+            return true;
+          },
+        });
         break;
     }
   });

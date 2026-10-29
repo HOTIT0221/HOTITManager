@@ -718,7 +718,7 @@ const ENTITIES = {
     table: 'assets',
     key: 'assets',
     fields: {
-      category: oneOf('server', 'domain', 'account', 'email', 'payment', 'bank', 'software', 'other'),
+      category: oneOf('server', 'domain', 'account', 'github', 'email', 'payment', 'bank', 'software', 'other'),
       name: text(500, true),
       provider: text(500),
       url: text(2000),
@@ -933,7 +933,7 @@ function secretName(name) {
   return n;
 }
 
-/** encrypted: Buffer from vault.protect() (Windows DPAPI), or null to remove. */
+/** encrypted: Buffer made by main.js (database key or Windows DPAPI, see protectSecret), or null to remove. */
 function setAssetSecret(id, encrypted, name = 'password') {
   const n = secretName(name);
   const t = now();
@@ -950,6 +950,26 @@ function setAssetSecret(id, encrypted, name = 'password') {
   }
   db.prepare('UPDATE assets SET updated_at = ? WHERE id = ?').run(t, str(id, 200));
   return !!encrypted;
+}
+
+/** Every saved secret, deleted assets included: [{ assetId, name, secret }]. */
+function listAssetSecrets() {
+  const row = (r) => ({ assetId: r.asset_id, name: r.name, secret: Buffer.from(r.secret) });
+  return [
+    ...db.prepare(`SELECT id AS asset_id, 'password' AS name, secret FROM assets WHERE secret IS NOT NULL`).all().map(row),
+    ...db.prepare('SELECT asset_id, name, secret FROM asset_secrets').all().map(row),
+  ];
+}
+
+/** The same secret encrypted another way (e.g. with the database's key): replaces `from` if still saved. */
+function reencryptAssetSecret(id, name, from, to) {
+  const n = secretName(name);
+  if (n === 'password') {
+    db.prepare('UPDATE assets SET secret = ? WHERE id = ? AND secret = ?').run(Buffer.from(to), str(id, 200), Buffer.from(from));
+  } else {
+    db.prepare('UPDATE asset_secrets SET secret = ? WHERE asset_id = ? AND name = ? AND secret = ?')
+      .run(Buffer.from(to), str(id, 200), n, Buffer.from(from));
+  }
 }
 
 function getAssetSecret(id, name = 'password') {
@@ -1244,6 +1264,6 @@ module.exports = {
   createContact, updateContact, deleteContact, restoreContact,
   createMessage, updateMessage, deleteMessage, restoreMessage, setMessageSeen,
   setAvatar, removeAvatar, setSetting,
-  saveRecord, deleteRecord, restoreRecord, setAssetSecret, getAssetSecret,
+  saveRecord, deleteRecord, restoreRecord, setAssetSecret, getAssetSecret, listAssetSecrets, reencryptAssetSecret,
   snapshotTo, exportJson, importJson, isValidJson, describeJson, databaseToJson,
 };

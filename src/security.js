@@ -105,9 +105,11 @@ function openEncryptDialog() {
       <p class="modal-text">Everything in the database (customers, assets, finances, goals, LinkedIn messages and images) is
         encrypted with your password. A copy of the file can't be read without it. Your existing automatic backups are
         encrypted too.</p>
+      <p class="modal-text">With the app, the database file and this password you can open all your data on any PC,
+        including the passwords and 2-step keys saved on your assets.</p>
       ${newPasswordFieldsHtml()}
       <div class="field">
-        <label class="check"><input type="checkbox" id="pw-remember" checked> Remember on this PC, so the app opens without asking</label>
+        <label class="check"><input type="checkbox" id="pw-remember"> Remember on this PC, so the app opens without asking</label>
         <div class="help">Remembered for your Windows account only. Without it you type the password each time the app starts.</div>
       </div>
       ${FORGET_WARNING}
@@ -132,6 +134,7 @@ function openEncryptDialog() {
           ? `Database encrypted. ${failed} old backup${failed === 1 ? '' : 's'} could not be encrypted (see the backups folder).`
           : 'Database encrypted');
         if (failed) console.error('Backups not encrypted:', r.copies.failed);
+        if (r.leftovers && r.leftovers.length) setTimeout(() => showPlainLeftovers(r.leftovers));
         return true;
       } catch (err) {
         toast(errorText(err));
@@ -139,6 +142,23 @@ function openEncryptDialog() {
         return false;
       }
     },
+  });
+}
+
+/** After encrypting: older unencrypted copies of the data that are still on this PC. */
+function showPlainLeftovers(paths) {
+  openModal({
+    title: 'Older copies are not encrypted',
+    body: `
+      <p class="modal-text">Your database is encrypted now, but these older copies of your data are still on this PC
+        without a password. Anyone who gets them can read them.</p>
+      <ul class="leftover-list">${paths.map((p) => `<li><code>${esc(p)}</code></li>`).join('')}</ul>
+      <p class="help">They are from earlier versions of the app (when it was called LinkedIn Message Tracker) or from
+        a location your database was kept before. Once you have checked that your data is all here, delete them in
+        File Explorer.</p>`,
+    okText: 'OK',
+    hideCancel: true,
+    onOk: () => true,
   });
 }
 
@@ -198,7 +218,8 @@ function setupSecurityField() {
     if (!box) return; // dialog closed
     if (st.status === 'plain') {
       box.innerHTML = `<span class="sec-badge off">Not encrypted</span>
-        <span class="help">Anyone who gets a copy of the database file can read it.</span>`;
+        <span class="help">Anyone who gets a copy of the database file can read it. Passwords saved on assets can only
+          be read on this PC by your Windows account: encrypt the database to take them to another PC with it.</span>`;
       $('#s-sec-buttons').innerHTML = '<button type="button" class="btn secondary small" id="s-encrypt">Encrypt with a password…</button>';
       $('#s-encrypt').addEventListener('click', () => {
         closeModal();
@@ -207,7 +228,8 @@ function setupSecurityField() {
       return;
     }
     box.innerHTML = `<span class="sec-badge on">Encrypted</span>
-      <span class="help">The database file and its backups can only be opened with your password.</span>
+      <span class="help">The database file and its backups can only be opened with your password, on any PC
+        (passwords saved on assets included).</span>
       <label class="check"><input type="checkbox" id="s-remember" ${st.remembered ? 'checked' : ''}>
         Remember the password on this PC</label>`;
     $('#s-sec-buttons').innerHTML = '<button type="button" class="btn secondary small" id="s-password">Change password…</button>';

@@ -2,9 +2,9 @@
 
 // ============================================================
 // Assets: servers, domains, online accounts, payment and bank accounts, software…
-// Passwords / API keys and the other secrets (backup codes, 2-step keys…) are encrypted by
-// Windows in the main process and only decrypted on request (Show / Copy); the renderer never
-// keeps them.
+// Passwords / API keys and the other secrets (backup codes, 2-step keys…) are encrypted in the
+// main process (with the database's key, or by Windows for a plain database) and only decrypted on
+// request (Show / Copy); the renderer never keeps them.
 // ============================================================
 
 const ASSET_CATEGORIES = {
@@ -26,6 +26,15 @@ const ASSET_CATEGORIES = {
     provider: 'Service', providerPh: 'e.g. GitHub, Google Workspace, Upwork', login: 'Username / email',
     fields: [['email', 'Recovery email', ''], ['twofa', '2-step verification', 'e.g. Authenticator on my phone']],
     secrets: ['backupCodes', 'totp'],
+    expense: 'Software',
+  },
+  github: {
+    label: 'GitHub account', plural: 'GitHub', icon: 'github', color: '#1f2328',
+    provider: 'GitHub site', providerPh: 'github.com, or your GitHub Enterprise address', login: 'Username',
+    secretLabel: 'Password',
+    fields: [['email', 'Account email', ''], ['twofa', '2-step verification', 'e.g. Authenticator app, passkey'],
+      ['orgs', 'Organizations', 'e.g. my-company, client-org'], ['plan', 'Plan', 'e.g. Free, Pro, Team']],
+    secrets: ['backupCodes', 'totp', 'accessTokens'],
     expense: 'Software',
   },
   email: {
@@ -69,6 +78,7 @@ const SECRET_FIELDS = {
   totp: { label: '2-step setup key', ph: 'Setup key or otpauth:// link',
     help: 'The key shown when you turn on 2-step verification (under the QR code). The app then shows the 6-digit codes.' },
   appPassword: { label: 'App password', ph: 'For mail apps (IMAP / SMTP)' },
+  accessTokens: { label: 'Access tokens', multiline: true, ph: 'Name — token — expires, one per line' },
   securityQa: { label: 'Security questions & answers', multiline: true, ph: 'Question — answer, one per line' },
 };
 const MASK = '••••••••••';
@@ -103,7 +113,7 @@ function visibleAssets() {
 
 function catIconHtml(category, size = '') {
   const cat = ASSET_CATEGORIES[category];
-  return `<span class="cat-icon ${size}" style="--cat:${cat.color}" title="${esc(cat.label)}">${icon(cat.icon, size === 'lg' ? 30 : size === 'sm' ? 14 : 22)}</span>`;
+  return `<span class="cat-icon cat-${category} ${size}" style="--cat:${cat.color}" title="${esc(cat.label)}">${icon(cat.icon, size === 'lg' ? 30 : size === 'sm' ? 14 : 22)}</span>`;
 }
 
 // ---------- rendering ----------
@@ -207,7 +217,7 @@ function renderAssetDetail() {
         <div class="empty-icon">${icon('assets', 56)}</div>
         <h2>${has ? 'Select an asset' : 'Everything your business runs on'}</h2>
         <p>${has ? 'Pick one from the list, or add a new one.'
-          : 'Servers, domains, online accounts, PayPal / Payoneer / Wise and bank accounts — with logins, renewal dates and what they cost. Passwords are encrypted with your Windows account.'}</p>
+          : 'Servers, domains, online accounts, PayPal / Payoneer / Wise and bank accounts — with logins, renewal dates and what they cost. Passwords are saved encrypted.'}</p>
         <button class="btn primary" data-as="new">Add an asset</button>
       </div>`;
     return;
@@ -391,7 +401,7 @@ function secretFieldsHtml(category, saved) {
   return names.map((name) => {
     const f = SECRET_FIELDS[name] || { label: name };
     const has = saved.includes(name);
-    const ph = has ? '•••••••• saved — type to replace' : (f.ph || 'Encrypted with your Windows account');
+    const ph = has ? '•••••••• saved — type to replace' : (f.ph || 'Saved encrypted');
     const attrs = `id="as-${esc(name)}" data-secret="${esc(name)}" spellcheck="false" placeholder="${esc(ph)}"`;
     return `
       <div class="field">
@@ -455,7 +465,7 @@ function openAssetModal(existing = null, preset = {}) {
           <label for="a-secret" id="a-secret-label">Password / API key</label>
           <div class="secret-input">
             <input id="a-secret" type="password" autocomplete="new-password" spellcheck="false"
-              placeholder="${existing?.hasSecret ? '•••••••• saved — type to replace' : 'Encrypted with your Windows account'}">
+              placeholder="${existing?.hasSecret ? '•••••••• saved — type to replace' : 'Saved encrypted'}">
             <button type="button" class="icon-btn tiny" id="a-secret-show" title="Show while typing">${icon('eye', 15)}</button>
           </div>
           ${existing?.hasSecret ? '<label class="check small"><input type="checkbox" id="a-secret-remove"> Remove the saved password</label>' : ''}
@@ -708,8 +718,11 @@ registerView({
       if (!a) return;
       if (action === 'edit') openAssetModal(a);
       else if (action === 'delete') {
-        if (as.selectedId === a.id) as.selectedId = null;
-        deleteRec('asset', a, a.name);
+        confirmDeleteRec('asset', a, a.name, {
+          what: 'asset',
+          note: a.hasSecret || a.secrets.length ? 'Its saved password and codes are removed with it.' : '',
+          before() { if (as.selectedId === a.id) as.selectedId = null; },
+        });
       } else if (action === 'reveal') {
         if (btn.dataset.secret === 'totp') showAssetCode(a);
         else revealAssetSecret(a, btn.dataset.secret || 'password');
