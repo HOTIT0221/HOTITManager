@@ -1850,8 +1850,8 @@ function pickContactPhoto(contact) {
 
 function showShortcuts() {
   const rows = [
-    ['Ctrl + Shift + 1 … 6', 'Go to Overview, Customers, Assets, Finance, Goals & Plans, LinkedIn'],
-    ['Ctrl + N', 'New customer / asset / transaction / task / contact (in the section you are in)'],
+    ['Ctrl + Shift + 1 … 7', 'Go to Overview, Customers, Assets, Finance, Goals & Plans, LinkedIn, Notes'],
+    ['Ctrl + N', 'New customer / asset / transaction / task / contact / note (in the section you are in)'],
     ['Ctrl + F', 'Search'],
     ['Esc', 'Clear search / close dialog'],
     ['Ctrl + Enter', 'Add message / save dialog'],

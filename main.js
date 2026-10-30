@@ -567,7 +567,7 @@ async function importBackup() {
   const n = store.describeJson(obj);
   const parts = [
     [n.customers, 'customer'], [n.assets, 'asset'], [n.transactions, 'transaction'], [n.goals, 'goal'],
-    [n.tasks, 'task'], [n.contacts, 'LinkedIn contact'], [n.messages, 'message'],
+    [n.tasks, 'task'], [n.contacts, 'LinkedIn contact'], [n.messages, 'message'], [n.notes, 'note'],
   ].filter(([c]) => c).map(([c, w]) => `${c} ${w}${c === 1 ? '' : 's'}`);
   const { response } = await dialog.showMessageBox(win, {
     type: 'question',
@@ -707,10 +707,11 @@ const runMoveDatabase = showingErrors('Could not change the database location', 
 
 // ---------- menu ----------
 
-// the app's sections, in the order of the navigation bar (Ctrl+Shift+1…6)
+// the app's sections, in the order of the navigation bar (Ctrl+Shift+1…7)
 const VIEWS = [
   ['overview', 'Overview'], ['customers', 'Customers'], ['assets', 'Assets'],
   ['finance', 'Finance'], ['goals', 'Goals && Plans'], ['linkedin', 'LinkedIn Messages'],
+  ['notes', 'Notes'],
 ];
 
 function buildMenu() {

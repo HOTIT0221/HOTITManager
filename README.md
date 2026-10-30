@@ -11,15 +11,16 @@ LinkedIn Message Tracker; the message log is now one of its sections.
 | **Finance** | Income and expenses in any currency, by month, with period filters, search and CSV export |
 | **Goals & Plans** | Goals measured from your data (income, profit, active clients, tasks done) or by hand, and a To do / In progress / Done task board |
 | **LinkedIn** | The LinkedIn message tracker: contacts, sent/received messages with images, "seen" markers, several LinkedIn accounts |
+| **Notes** | Text you use again and again (intros, replies, bank details, proposal paragraphs) saved under a title, with a tag; one click copies it. Pinned notes stay at the top |
 
 **Settings → Appearance** switches between a light and a dark theme (or follows Windows) and can put a color or a picture of your own behind the pages; it is saved per PC.
 
-`Ctrl+Shift+1…6` switches sections, `Ctrl+N` adds something to the current section, `Ctrl+F` searches it.
+`Ctrl+Shift+1…7` switches sections, `Ctrl+N` adds something to the current section, `Ctrl+F` searches it.
 
 ## Use it
 
-- **Install:** run `dist\IT Business Manager Setup 3.6.0.exe` (installs over earlier versions), or
-- **No install:** run `dist\ITBusinessManager-Portable-3.6.0.exe`.
+- **Install:** run `dist\IT Business Manager Setup 3.7.0.exe` (installs over earlier versions), or
+- **No install:** run `dist\ITBusinessManager-Portable-3.7.0.exe`.
 
 ## Your data
 

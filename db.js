@@ -15,7 +15,7 @@ const path = require('path');
 const cryptfile = require('./cryptfile');
 const { countryFromLegacyValue } = require('./src/countries');
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 const PURGE_DELETED_AFTER_DAYS = 30;
 
 let db = null;
@@ -362,6 +362,24 @@ function migrate() {
       db.exec('PRAGMA user_version = 7');
     });
   }
+  if (version < 8) {
+    // Notes: text you use again and again (replies, intros, proposal paragraphs), saved under a title
+    tx(() => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS notes (
+          id           TEXT PRIMARY KEY,
+          title        TEXT NOT NULL,
+          text         TEXT NOT NULL DEFAULT '',
+          tag          TEXT NOT NULL DEFAULT '',
+          pinned       INTEGER NOT NULL DEFAULT 0,      -- 1: shown at the top
+          created_at   TEXT NOT NULL,
+          updated_at   TEXT NOT NULL,
+          deleted_at   TEXT
+        );
+      `);
+      db.exec('PRAGMA user_version = 8');
+    });
+  }
 }
 
 /** There is always at least one account (e.g. after importing an old backup into an empty database). */
@@ -398,7 +416,7 @@ function purgeDeleted() {
   const cutoff = new Date(Date.now() - PURGE_DELETED_AFTER_DAYS * 86400000).toISOString();
   tx(() => {
     // records that point at a purged one keep existing (their link is cleared by ON DELETE SET NULL)
-    for (const table of ['messages', 'transactions', 'tasks', 'assets', 'goals', 'customers', 'contacts']) {
+    for (const table of ['messages', 'transactions', 'tasks', 'assets', 'goals', 'customers', 'contacts', 'notes']) {
       db.prepare(`DELETE FROM ${table} WHERE deleted_at IS NOT NULL AND deleted_at < ?`).run(cutoff);
     }
     db.prepare(`
@@ -680,7 +698,7 @@ function setMessageSeen(id, seenAt) {
   return value;
 }
 
-// ---------- business records: customers, assets, transactions, goals, tasks ----------
+// ---------- business records: customers, assets, transactions, goals, tasks, notes ----------
 // Each record type is described by its fields; saving cleans every value to that description,
 // so the renderer can send a whole object and get back exactly what was stored.
 
@@ -777,6 +795,16 @@ const ENTITIES = {
       goalId: ref('goals'),
       customerId: ref('customers'),
       position: NUM_OR_ZERO,
+    },
+  },
+  note: {
+    table: 'notes',
+    key: 'notes',
+    fields: {
+      title: text(500, true),
+      text: text(),
+      tag: text(200),
+      pinned: NUM_OR_ZERO,
     },
   },
 };
@@ -1102,6 +1130,7 @@ function exportJson() {
     transactions: data.transactions,
     goals: data.goals,
     tasks: data.tasks,
+    notes: data.notes,
     accounts: data.accounts.map(({ avatarVersion, ...a }) => ({ ...a, avatar: avatarVersion ? avatarFor(a.id) : undefined })),
     contacts: data.contacts.map(({ avatarVersion, ...c }) => ({ ...c, avatar: avatarVersion ? avatarFor(c.id) : undefined })),
     messages: data.messages.map((m) => ({
@@ -1133,7 +1162,7 @@ function importJson(obj, mode = 'replace') {
   tx(() => {
     if (mode === 'replace') {
       db.exec(`
-        DELETE FROM transactions; DELETE FROM tasks; DELETE FROM assets; DELETE FROM goals; DELETE FROM customers;
+        DELETE FROM transactions; DELETE FROM tasks; DELETE FROM assets; DELETE FROM goals; DELETE FROM customers; DELETE FROM notes;
         DELETE FROM attachments; DELETE FROM messages; DELETE FROM contacts;
         DELETE FROM avatars; DELETE FROM accounts; DELETE FROM settings;
       `);
@@ -1201,7 +1230,7 @@ function importJson(obj, mode = 'replace') {
 
     // business records, in an order where everything they link to already exists
     // (backups from the LinkedIn-only versions simply have none)
-    for (const type of ['customer', 'goal', 'asset', 'transaction', 'task']) {
+    for (const type of ['customer', 'goal', 'asset', 'transaction', 'task', 'note']) {
       const spec = ENTITIES[type];
       const list = Array.isArray(obj[spec.key]) ? obj[spec.key] : [];
       for (const rec of list) {
@@ -1254,6 +1283,7 @@ function describeJson(obj) {
     transactions: n('transactions'),
     goals: n('goals'),
     tasks: n('tasks'),
+    notes: n('notes'),
   };
 }
 
