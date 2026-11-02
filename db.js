@@ -2,6 +2,10 @@
 
 // SQLite storage, using the SQLite engine built into Electron's Node.js (no native modules to compile).
 //
+// Until version 3.7 this database also held the LinkedIn message tracker (accounts, contacts,
+// messages, attachments). That is a separate app now (LinkedIn Tracker): upgrading to schema 9
+// empties those tables, after main.js has kept a copy of the database as it was.
+//
 // A database can be a plain SQLite file, or encrypted with a password (cryptfile.js). An encrypted
 // database is decrypted into memory when it is opened, and every change is written back to the
 // file encrypted (save(), called by main.js shortly after each change), so the data is never on
@@ -15,7 +19,7 @@ const path = require('path');
 const cryptfile = require('./cryptfile');
 const { countryFromLegacyValue } = require('./src/countries');
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 const PURGE_DELETED_AFTER_DAYS = 30;
 
 let db = null;
@@ -23,7 +27,7 @@ let dbFile = null;
 let crypt = null; // { key, header } while an encrypted database is open
 let savedChanges = 0; // SQLite's change counter when the encrypted file was last written
 
-const CONTACT_COLS = `id, account_id, name, linkedin_url, nationality, headline, notes, created_at, updated_at`;
+let removedLinkedIn = 0; // contacts + messages the upgrade to schema 9 removed from the open database
 
 // ---------- open / migrate ----------
 
@@ -54,8 +58,8 @@ function open(file, { onUpgrade, key } = {}) {
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
   if (onUpgrade && version > 0 && version < SCHEMA_VERSION) onUpgrade(version);
-  migrate();
-  ensureAccount();
+  removedLinkedIn = migrate();
+  if (removedLinkedIn) db.exec('VACUUM'); // once: give the space of the removed messages and images back
   purgeDeleted();
   save(version < SCHEMA_VERSION);
 }
@@ -380,16 +384,25 @@ function migrate() {
       db.exec('PRAGMA user_version = 8');
     });
   }
-}
-
-/** There is always at least one account (e.g. after importing an old backup into an empty database). */
-function ensureAccount() {
-  if (db.prepare('SELECT COUNT(*) AS n FROM accounts').get().n) return;
-  const id = crypto.randomUUID();
-  const t = now();
-  db.prepare('INSERT INTO accounts (id, name, linkedin_url, position, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)')
-    .run(id, 'Me', '', t, t);
-  db.prepare('UPDATE contacts SET account_id = ? WHERE account_id IS NULL').run(id);
+  let removed = 0;
+  if (version < 9) {
+    // the LinkedIn message tracker moved to its own app: remove its data (the tables stay, empty,
+    // because customers.contact_id still refers to contacts)
+    tx(() => {
+      removed = db.prepare('SELECT (SELECT COUNT(*) FROM contacts) + (SELECT COUNT(*) FROM messages) AS n').get().n;
+      db.exec(`
+        UPDATE customers SET contact_id = NULL;
+        DELETE FROM attachments;
+        DELETE FROM messages;
+        DELETE FROM contacts;
+        DELETE FROM accounts;
+        DELETE FROM avatars WHERE owner_id NOT IN (SELECT id FROM customers);
+        DELETE FROM settings WHERE key = 'currentAccount';
+      `);
+      db.exec('PRAGMA user_version = 9');
+    });
+  }
+  return removed;
 }
 
 function tx(fn) {
@@ -416,286 +429,35 @@ function purgeDeleted() {
   const cutoff = new Date(Date.now() - PURGE_DELETED_AFTER_DAYS * 86400000).toISOString();
   tx(() => {
     // records that point at a purged one keep existing (their link is cleared by ON DELETE SET NULL)
-    for (const table of ['messages', 'transactions', 'tasks', 'assets', 'goals', 'customers', 'contacts', 'notes']) {
+    for (const table of ['transactions', 'tasks', 'assets', 'goals', 'customers', 'notes']) {
       db.prepare(`DELETE FROM ${table} WHERE deleted_at IS NOT NULL AND deleted_at < ?`).run(cutoff);
     }
-    db.prepare(`
-      DELETE FROM avatars
-      WHERE owner_id NOT IN (SELECT id FROM contacts) AND owner_id NOT IN (SELECT id FROM accounts)
-        AND owner_id NOT IN (SELECT id FROM customers)
-    `).run();
+    db.prepare('DELETE FROM avatars WHERE owner_id NOT IN (SELECT id FROM customers)').run();
   });
 }
 
 // ---------- reading ----------
 
-function rowToAccount(r) {
-  return {
-    id: r.id,
-    name: r.name,
-    linkedinUrl: r.linkedin_url,
-    position: r.position,
-    createdAt: r.created_at,
-    avatarVersion: r.avatar_updated_at || null,
-  };
-}
-
-function rowToContact(r) {
-  return {
-    id: r.id,
-    accountId: r.account_id,
-    name: r.name,
-    linkedinUrl: r.linkedin_url,
-    nationality: r.nationality,
-    headline: r.headline,
-    notes: r.notes,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    avatarVersion: r.avatar_updated_at || null,
-  };
-}
-
-function rowToMessage(r) {
-  return {
-    id: r.id,
-    contactId: r.contact_id,
-    direction: r.direction,
-    text: r.text,
-    sentAt: r.sent_at,
-    seenAt: r.seen_at || null,
-    createdAt: r.created_at,
-  };
-}
-
-/** Only sent messages can be "seen"; anything else is stored as NULL. */
-function seenValue(m) {
-  if (m.direction !== 'out' || !m.seenAt) return null;
-  const d = new Date(m.seenAt);
-  if (Number.isNaN(d.getTime())) throw new Error('Invalid seen time');
-  return d.toISOString();
-}
-
 function getSettings() {
-  // currentAccount: id of the LinkedIn account being viewed, '' = all accounts
   // baseCurrency: totals are shown in it; fxRates: { EUR: 1.08 } = 1 EUR is worth 1.08 of the base currency
-  const settings = { timeZone: '', currentAccount: '', baseCurrency: 'USD', fxRates: {} };
+  const settings = { timeZone: '', baseCurrency: 'USD', fxRates: {} };
   for (const r of db.prepare('SELECT key, value FROM settings').all()) {
     try { settings[r.key] = JSON.parse(r.value); } catch { /* skip bad value */ }
   }
   return settings;
 }
 
-function listAccounts() {
-  return db.prepare(`
-    SELECT ac.*, a.updated_at AS avatar_updated_at
-    FROM accounts ac LEFT JOIN avatars a ON a.owner_id = ac.id
-    ORDER BY ac.position, ac.created_at
-  `).all().map(rowToAccount);
-}
-
 function loadAll() {
-  const contacts = db.prepare(`
-    SELECT c.${CONTACT_COLS.split(', ').join(', c.')}, a.updated_at AS avatar_updated_at
-    FROM contacts c LEFT JOIN avatars a ON a.owner_id = c.id
-    WHERE c.deleted_at IS NULL
-  `).all().map(rowToContact);
-  const messages = db.prepare(`
-    SELECT m.* FROM messages m JOIN contacts c ON c.id = m.contact_id
-    WHERE m.deleted_at IS NULL AND c.deleted_at IS NULL
-    ORDER BY m.sent_at, m.created_at
-  `).all().map(rowToMessage);
-
-  // attachment metadata only; the image bytes are served through attachment://
-  const byMessage = new Map();
-  for (const a of db.prepare(`
-    SELECT id, message_id, name, mime, width, height, size FROM attachments ORDER BY message_id, position
-  `).all()) {
-    if (!byMessage.has(a.message_id)) byMessage.set(a.message_id, []);
-    byMessage.get(a.message_id).push(rowToAttachment(a));
-  }
-  for (const m of messages) m.attachments = byMessage.get(m.id) || [];
-
   return {
     settings: getSettings(),
-    accounts: listAccounts(),
-    contacts,
-    messages,
     ...Object.fromEntries(Object.entries(ENTITIES).map(([type, spec]) => [spec.key, listRecords(type)])),
     file: dbFile,
   };
 }
 
-function rowToAttachment(a) {
-  return { id: a.id, name: a.name, mime: a.mime, width: a.width, height: a.height, size: a.size };
-}
-
-function getAttachment(id) {
-  const r = db.prepare('SELECT name, mime, data FROM attachments WHERE id = ?').get(str(id, 200));
-  return r ? { name: r.name, mime: r.mime, data: Buffer.from(r.data) } : null;
-}
-
 function getAvatar(ownerId) {
   const r = db.prepare('SELECT mime, data FROM avatars WHERE owner_id = ?').get(str(ownerId, 200));
   return r ? { mime: r.mime, data: Buffer.from(r.data) } : null;
-}
-
-function counts() {
-  return db.prepare(`
-    SELECT (SELECT COUNT(*) FROM contacts WHERE deleted_at IS NULL) AS contacts,
-           (SELECT COUNT(*) FROM messages WHERE deleted_at IS NULL) AS messages
-  `).get();
-}
-
-function accountExists(id) {
-  return !!db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(str(id, 200));
-}
-
-function requireAccount(id) {
-  if (!accountExists(id)) throw new Error('Unknown account');
-  return str(id, 200);
-}
-
-// ---------- writing: accounts ----------
-
-function createAccount(a) {
-  const name = str(a.name, 200).trim();
-  if (!name) throw new Error('Account name is required');
-  const t = now();
-  const pos = db.prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM accounts').get().p;
-  db.prepare('INSERT INTO accounts (id, name, linkedin_url, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(str(a.id, 200), name, str(a.linkedinUrl, 2000), pos, t, t);
-  return true;
-}
-
-function updateAccount(a) {
-  const name = str(a.name, 200).trim();
-  if (!name) throw new Error('Account name is required');
-  db.prepare('UPDATE accounts SET name = ?, linkedin_url = ?, updated_at = ? WHERE id = ?')
-    .run(name, str(a.linkedinUrl, 2000), now(), requireAccount(a.id));
-  return true;
-}
-
-/**
- * Remove an account. Its contacts (including recently deleted ones) move to `moveTo`;
- * with deleteContacts they are moved and then deleted (recoverable for 30 days / from backups).
- */
-function deleteAccount(id, moveTo, deleteContacts = false) {
-  return tx(() => {
-    requireAccount(id);
-    if (db.prepare('SELECT COUNT(*) AS n FROM accounts').get().n < 2) throw new Error("The last account can't be deleted");
-    if (moveTo === id) throw new Error('Choose a different account');
-    requireAccount(moveTo);
-    if (deleteContacts) {
-      db.prepare('UPDATE contacts SET deleted_at = ? WHERE account_id = ? AND deleted_at IS NULL').run(now(), id);
-    }
-    db.prepare('UPDATE contacts SET account_id = ?, updated_at = ? WHERE account_id = ?').run(moveTo, now(), id);
-    db.prepare('DELETE FROM avatars WHERE owner_id = ?').run(id);
-    db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
-    const cur = getSettings().currentAccount;
-    if (cur === id) setSetting('currentAccount', moveTo);
-    return true;
-  });
-}
-
-// ---------- writing: contacts ----------
-
-function createContact(c) {
-  const t = now();
-  db.prepare(`
-    INSERT INTO contacts (${CONTACT_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(str(c.id, 200), requireAccount(c.accountId), str(c.name, 500), str(c.linkedinUrl, 2000),
-    str(c.nationality, 200), str(c.headline, 1000), str(c.notes), str(c.createdAt) || t, t);
-  return true;
-}
-
-function updateContact(c) {
-  db.prepare(`
-    UPDATE contacts SET account_id = ?, name = ?, linkedin_url = ?, nationality = ?, headline = ?, notes = ?, updated_at = ?
-    WHERE id = ?
-  `).run(requireAccount(c.accountId), str(c.name, 500), str(c.linkedinUrl, 2000), str(c.nationality, 200),
-    str(c.headline, 1000), str(c.notes), now(), str(c.id, 200));
-  return true;
-}
-
-function deleteContact(id) {
-  db.prepare('UPDATE contacts SET deleted_at = ? WHERE id = ?').run(now(), str(id, 200));
-  return true;
-}
-
-function restoreContact(id) {
-  db.prepare('UPDATE contacts SET deleted_at = NULL WHERE id = ?').run(str(id, 200));
-  return true;
-}
-
-// ---------- writing: messages ----------
-
-const IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
-const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
-
-function insertAttachment(messageId, a, position) {
-  if (!IMAGE_MIMES.has(a.mime)) throw new Error('Unsupported image type');
-  const buf = Buffer.from(a.bytes);
-  if (!buf.length || buf.length > MAX_ATTACHMENT_BYTES) throw new Error('Image is too large (max 20 MB)');
-  db.prepare(`
-    INSERT INTO attachments (id, message_id, position, name, mime, width, height, size, data, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(str(a.id, 200), str(messageId, 200), position, str(a.name, 300), a.mime,
-    Math.round(Number(a.width) || 0), Math.round(Number(a.height) || 0), buf.length, buf, now());
-}
-
-function attachmentList(messageId) {
-  return db.prepare(`SELECT id, name, mime, width, height, size FROM attachments WHERE message_id = ? ORDER BY position`)
-    .all(str(messageId, 200)).map(rowToAttachment);
-}
-
-/** attachments: [{ id, name, mime, width, height, bytes }]. Returns the stored attachment metadata. */
-function createMessage(m, attachments = []) {
-  if (m.direction !== 'in' && m.direction !== 'out') throw new Error('Invalid direction');
-  return tx(() => {
-    const t = now();
-    db.prepare(`
-      INSERT INTO messages (id, contact_id, direction, text, sent_at, seen_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(str(m.id, 200), str(m.contactId, 200), m.direction, str(m.text, 1000000), str(m.sentAt, 64),
-      seenValue(m), str(m.createdAt, 64) || t, t);
-    attachments.forEach((a, i) => insertAttachment(m.id, a, i));
-    db.prepare('UPDATE contacts SET updated_at = ? WHERE id = ?').run(t, str(m.contactId, 200));
-    return attachmentList(m.id);
-  });
-}
-
-/** changes: { add: [new attachments], remove: [attachment ids] }. Returns the stored attachment metadata. */
-function updateMessage(m, changes = {}) {
-  if (m.direction !== 'in' && m.direction !== 'out') throw new Error('Invalid direction');
-  return tx(() => {
-    db.prepare(`UPDATE messages SET direction = ?, text = ?, sent_at = ?, seen_at = ?, updated_at = ? WHERE id = ?`)
-      .run(m.direction, str(m.text, 1000000), str(m.sentAt, 64), seenValue(m), now(), str(m.id, 200));
-    for (const id of changes.remove || []) {
-      db.prepare('DELETE FROM attachments WHERE id = ? AND message_id = ?').run(str(id, 200), str(m.id, 200));
-    }
-    let pos = db.prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM attachments WHERE message_id = ?')
-      .get(str(m.id, 200)).p;
-    for (const a of changes.add || []) insertAttachment(m.id, a, pos++);
-    return attachmentList(m.id);
-  });
-}
-
-function deleteMessage(id) {
-  db.prepare('UPDATE messages SET deleted_at = ? WHERE id = ?').run(now(), str(id, 200));
-  return true;
-}
-
-function restoreMessage(id) {
-  db.prepare('UPDATE messages SET deleted_at = NULL WHERE id = ?').run(str(id, 200));
-  return true;
-}
-
-/** Mark a sent message as seen at `seenAt` (ISO string), or not seen (null). */
-function setMessageSeen(id, seenAt) {
-  const value = seenValue({ direction: 'out', seenAt });
-  db.prepare(`UPDATE messages SET seen_at = ?, updated_at = ? WHERE id = ? AND direction = 'out'`)
-    .run(value, now(), str(id, 200));
-  return value;
 }
 
 // ---------- business records: customers, assets, transactions, goals, tasks, notes ----------
@@ -726,7 +488,6 @@ const ENTITIES = {
       country: text(200),
       website: text(2000),
       linkedinUrl: text(2000),
-      contactId: ref('contacts'),
       tags: text(1000),
       notes: text(),
       since: DATE,
@@ -1033,7 +794,6 @@ function removeAvatar(ownerId) {
 
 const SETTING_CHECKS = {
   timeZone: (v) => typeof v === 'string' && v.length <= 100,
-  currentAccount: (v) => typeof v === 'string' && v.length <= 100,
   baseCurrency: (v) => typeof v === 'string' && /^[A-Z0-9]{2,6}$/.test(v),
   fxRates: (v) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length <= 300 &&
     Object.entries(v).every(([k, n]) => /^[A-Z0-9]{2,6}$/.test(k) && Number.isFinite(n) && n > 0),
@@ -1045,6 +805,13 @@ function setSetting(key, value) {
   db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
     .run(key, JSON.stringify(value));
   return true;
+}
+
+/** How many LinkedIn contacts + messages the upgrade to schema 9 removed when the database was opened (once). */
+function takeRemovedLinkedIn() {
+  const n = removedLinkedIn;
+  removedLinkedIn = 0;
+  return n;
 }
 
 // ---------- backup / import / export ----------
@@ -1078,7 +845,6 @@ function databaseToJson(bytes) {
     }
     db.exec('PRAGMA foreign_keys = ON');
     migrate();
-    ensureAccount();
     return exportJson();
   } finally {
     try { db.close(); } catch { /* ignore */ }
@@ -1131,20 +897,16 @@ function exportJson() {
     goals: data.goals,
     tasks: data.tasks,
     notes: data.notes,
-    accounts: data.accounts.map(({ avatarVersion, ...a }) => ({ ...a, avatar: avatarVersion ? avatarFor(a.id) : undefined })),
-    contacts: data.contacts.map(({ avatarVersion, ...c }) => ({ ...c, avatar: avatarVersion ? avatarFor(c.id) : undefined })),
-    messages: data.messages.map((m) => ({
-      ...m,
-      attachments: m.attachments.map((a) => {
-        const full = getAttachment(a.id);
-        return { ...a, data: `data:${full.mime};base64,${full.data.toString('base64')}` };
-      }),
-    })),
   };
 }
 
+const RECORD_LISTS = ['customers', 'assets', 'transactions', 'goals', 'tasks', 'notes'];
+
+/** This app's export, or an older one that also held LinkedIn data (only its business records are used). */
 function isValidJson(obj) {
-  return obj && typeof obj === 'object' && Array.isArray(obj.contacts) && Array.isArray(obj.messages);
+  return !!obj && typeof obj === 'object' &&
+    (obj.format === 'it-business-manager' || RECORD_LISTS.some((k) => Array.isArray(obj[k])) ||
+      (Array.isArray(obj.contacts) && Array.isArray(obj.messages)));
 }
 
 function parseDataUrl(url) {
@@ -1153,9 +915,9 @@ function parseDataUrl(url) {
 }
 
 /**
- * Load a JSON backup (this app's export of any version, or the old data.json format).
+ * Load a JSON backup (this app's export of any version). LinkedIn contacts and messages in backups
+ * from before version 3.8 are left out: they belong to the separate LinkedIn Tracker app now.
  * mode 'replace' wipes current data first; 'merge' only adds records whose ids are new.
- * Backups from before multiple accounts had one implicit account (settings.myName / myAvatar).
  */
 function importJson(obj, mode = 'replace') {
   if (!isValidJson(obj)) throw new Error('Not a valid backup file');
@@ -1163,72 +925,13 @@ function importJson(obj, mode = 'replace') {
     if (mode === 'replace') {
       db.exec(`
         DELETE FROM transactions; DELETE FROM tasks; DELETE FROM assets; DELETE FROM goals; DELETE FROM customers; DELETE FROM notes;
-        DELETE FROM attachments; DELETE FROM messages; DELETE FROM contacts;
-        DELETE FROM avatars; DELETE FROM accounts; DELETE FROM settings;
+        DELETE FROM avatars; DELETE FROM settings;
       `);
     }
     const t = now();
     const settings = obj.settings || {};
 
-    // accounts
-    const insAccount = db.prepare(`
-      INSERT OR IGNORE INTO accounts (id, name, linkedin_url, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    let pos = db.prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM accounts').get().p;
-    for (const a of Array.isArray(obj.accounts) ? obj.accounts : []) {
-      if (!a || !a.id || !a.name) continue;
-      const { changes } = insAccount.run(str(a.id, 200), str(a.name, 200), str(a.linkedinUrl, 2000), pos++,
-        str(a.createdAt) || t, t);
-      const av = parseDataUrl(a.avatar);
-      if (changes && av) setAvatar(a.id, av.mime, av.data);
-    }
-    // an old single-account backup: its contacts belong to an account made from settings.myName,
-    // or (when merging) to your first account
-    let fallback = db.prepare('SELECT id FROM accounts ORDER BY position, created_at LIMIT 1').get()?.id;
-    if (!Array.isArray(obj.accounts) && (mode === 'replace' || !fallback)) {
-      fallback = crypto.randomUUID();
-      insAccount.run(fallback, str(settings.myName || 'Me', 200), '', pos++, t, t);
-      const me = parseDataUrl(settings.myAvatar);
-      if (me) setAvatar(fallback, me.mime, me.data);
-    }
-    if (!fallback) {
-      fallback = crypto.randomUUID();
-      insAccount.run(fallback, 'Me', '', pos++, t, t);
-    }
-
-    // contacts + messages
-    const insContact = db.prepare(`
-      INSERT OR IGNORE INTO contacts (${CONTACT_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const insMsg = db.prepare(`
-      INSERT OR IGNORE INTO messages (id, contact_id, direction, text, sent_at, seen_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const ids = new Set();
-    for (const c of obj.contacts) {
-      if (!c || !c.id || !c.name) continue;
-      const accountId = c.accountId && accountExists(c.accountId) ? c.accountId : fallback;
-      insContact.run(str(c.id, 200), accountId, str(c.name, 500), str(c.linkedinUrl, 2000),
-        str(countryFromLegacyValue(c.nationality), 200), str(c.headline, 1000), str(c.notes),
-        str(c.createdAt) || t, str(c.updatedAt) || t);
-      ids.add(String(c.id));
-      const av = parseDataUrl(c.avatar);
-      if (av && (mode === 'replace' || !getAvatar(c.id))) setAvatar(c.id, av.mime, av.data);
-    }
-    for (const m of obj.messages) {
-      if (!m || !m.id || !ids.has(String(m.contactId)) || (m.direction !== 'in' && m.direction !== 'out')) continue;
-      let seen = null;
-      try { seen = seenValue(m); } catch { /* ignore a bad seen time in old files */ }
-      const { changes } = insMsg.run(str(m.id, 200), str(m.contactId, 200), m.direction, str(m.text, 1000000),
-        str(m.sentAt, 64), seen, str(m.createdAt, 64) || t, t);
-      if (!changes || !Array.isArray(m.attachments)) continue;
-      m.attachments.forEach((a, i) => {
-        const img = a && parseDataUrl(a.data);
-        if (img) insertAttachment(m.id, { ...a, mime: img.mime, bytes: img.data }, i);
-      });
-    }
-
-    // business records, in an order where everything they link to already exists
+    // records, in an order where everything they link to already exists
     // (backups from the LinkedIn-only versions simply have none)
     for (const type of ['customer', 'goal', 'asset', 'transaction', 'task', 'note']) {
       const spec = ENTITIES[type];
@@ -1263,7 +966,6 @@ function importJson(obj, mode = 'replace') {
 
     if (mode === 'replace') {
       if (typeof settings.timeZone === 'string') setSetting('timeZone', settings.timeZone);
-      setSetting('currentAccount', '');
       try {
         if (settings.baseCurrency) setSetting('baseCurrency', settings.baseCurrency);
         if (settings.fxRates) setSetting('fxRates', settings.fxRates);
@@ -1276,8 +978,6 @@ function importJson(obj, mode = 'replace') {
 function describeJson(obj) {
   const n = (k) => (Array.isArray(obj[k]) ? obj[k].length : 0);
   return {
-    contacts: n('contacts'),
-    messages: n('messages'),
     customers: n('customers'),
     assets: n('assets'),
     transactions: n('transactions'),
@@ -1289,10 +989,7 @@ function describeJson(obj) {
 
 module.exports = {
   open, close, currentFile, isOpen, encryption, save, encryptWith, setHeader, encryptCopy,
-  loadAll, counts, getAvatar, getAttachment,
-  createAccount, updateAccount, deleteAccount,
-  createContact, updateContact, deleteContact, restoreContact,
-  createMessage, updateMessage, deleteMessage, restoreMessage, setMessageSeen,
+  loadAll, getAvatar, takeRemovedLinkedIn,
   setAvatar, removeAvatar, setSetting,
   saveRecord, deleteRecord, restoreRecord, setAssetSecret, getAssetSecret, listAssetSecrets, reencryptAssetSecret,
   snapshotTo, exportJson, importJson, isValidJson, describeJson, databaseToJson,

@@ -1,7 +1,7 @@
 'use strict';
 
 const {
-  app, BrowserWindow, ipcMain, dialog, shell, Menu, protocol, clipboard, ClipboardItem, nativeImage, nativeTheme,
+  app, BrowserWindow, ipcMain, dialog, shell, Menu, protocol, clipboard, nativeTheme,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -42,7 +42,6 @@ migrateLegacyUserDir();
 const USER_DIR = app.getPath('userData');
 const CONFIG_FILE = path.join(USER_DIR, 'config.json');
 const DEFAULT_DB_FILE = path.join(USER_DIR, 'tracker.db');
-const LEGACY_JSON_FILE = path.join(USER_DIR, 'data.json');
 const BACKUP_DIR = path.join(USER_DIR, 'backups');
 const WINDOW_FILE = path.join(USER_DIR, 'window.json');
 const KEYS_FILE = path.join(USER_DIR, 'keys.json');
@@ -50,10 +49,9 @@ const MAX_DAILY_BACKUPS = 30;
 
 let win = null;
 
-// Images are served from the database through avatar://img/<ownerId> and attachment://file/<id>
+// Customer photos are served from the database through avatar://img/<ownerId>
 protocol.registerSchemesAsPrivileged([
   { scheme: 'avatar', privileges: { standard: true, secure: true, supportFetchAPI: true } },
-  { scheme: 'attachment', privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
 
 // ---------- config + database ----------
@@ -72,10 +70,12 @@ function writeConfig(cfg) {
 }
 
 // Before an older database is upgraded to a new structure, keep a copy of it as it was.
+let upgradeBackup = null; // the copy made before the last upgrade
+
 const DB_OPEN_OPTIONS = {
   onUpgrade(oldVersion) {
     try {
-      snapshotBefore(`upgrade-from-v${oldVersion}`);
+      upgradeBackup = snapshotBefore(`upgrade-from-v${oldVersion}`);
     } catch (err) {
       console.error('Pre-upgrade backup failed:', err);
     }
@@ -166,7 +166,8 @@ async function openFile(file) {
 }
 
 function afterOpen() {
-  migrateLegacyJson();
+  if (store.takeRemovedLinkedIn()) linkedInNotice = upgradeBackup || BACKUP_DIR;
+  showLinkedInNotice();
   runBackups();
   moveSecretsToDatabaseKey().catch((err) => console.error('Could not move the passwords to the database key:', err));
 }
@@ -394,17 +395,27 @@ function scheduleSave(delay = 250) {
   if (!saveTimer) saveTimer = setTimeout(saveNow, delay);
 }
 
-/** One-time import of data saved by version 1.0 (data.json). */
-function migrateLegacyJson() {
-  if (!fs.existsSync(LEGACY_JSON_FILE) || store.counts().contacts > 0) return;
-  try {
-    const legacy = JSON.parse(fs.readFileSync(LEGACY_JSON_FILE, 'utf8'));
-    if (!store.isValidJson(legacy)) return;
-    store.importJson(legacy, 'replace');
-    fs.renameSync(LEGACY_JSON_FILE, `${LEGACY_JSON_FILE}.migrated-${Date.now()}`);
-  } catch (err) {
-    dialog.showErrorBox('Could not migrate old data', `${LEGACY_JSON_FILE}\n\n${err.message}`);
-  }
+// ---------- LinkedIn messages moved out (version 3.8) ----------
+
+let linkedInNotice = null; // where the copy with the LinkedIn messages is, until the notice was shown
+let pageLoaded = false; // the window's page has finished loading
+
+/** Once, after the upgrade removed the LinkedIn data: say where it went. */
+function showLinkedInNotice() {
+  if (!linkedInNotice || !win || !pageLoaded) return;
+  const where = linkedInNotice;
+  linkedInNotice = null;
+  dialog.showMessageBox(win, {
+    type: 'info',
+    message: 'LinkedIn messages have moved to their own app',
+    detail: 'The LinkedIn message tracker is now a separate app, LinkedIn Tracker, so it was removed from HOTIT Manager.\n\n' +
+      `A copy of your database from before this update, with your LinkedIn contacts and messages, is here:\n${where}\n\n` +
+      'Open LinkedIn Tracker to import them from it.',
+    buttons: ['Show the copy', 'OK'],
+    defaultId: 1,
+  }).then(({ response }) => {
+    if (response === 0) shell.showItemInFolder(where);
+  });
 }
 
 /** Daily snapshots (last 30 kept) plus one per month kept forever. */
@@ -479,9 +490,16 @@ function createWindow() {
   if (state.maximized) win.maximize();
   // launched by Windows at sign-in with "start minimized": sit in the taskbar instead of popping up
   win.once('ready-to-show', () => (process.argv.includes(MINIMIZED_ARG) ? win.minimize() : win.show()));
+  win.webContents.once('did-finish-load', () => {
+    pageLoaded = true;
+    showLinkedInNotice();
+  });
   win.on('close', saveWindowState);
   win.on('session-end', saveNow); // Windows is shutting down or signing out
-  win.on('closed', () => { win = null; });
+  win.on('closed', () => {
+    win = null;
+    pageLoaded = false;
+  });
 
   // Never navigate the app window away; send links to the default browser.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -567,7 +585,7 @@ async function importBackup() {
   const n = store.describeJson(obj);
   const parts = [
     [n.customers, 'customer'], [n.assets, 'asset'], [n.transactions, 'transaction'], [n.goals, 'goal'],
-    [n.tasks, 'task'], [n.contacts, 'LinkedIn contact'], [n.messages, 'message'], [n.notes, 'note'],
+    [n.tasks, 'task'], [n.notes, 'note'],
   ].filter(([c]) => c).map(([c, w]) => `${c} ${w}${c === 1 ? '' : 's'}`);
   const { response } = await dialog.showMessageBox(win, {
     type: 'question',
@@ -707,11 +725,10 @@ const runMoveDatabase = showingErrors('Could not change the database location', 
 
 // ---------- menu ----------
 
-// the app's sections, in the order of the navigation bar (Ctrl+Shift+1…7)
+// the app's sections, in the order of the navigation bar (Ctrl+Shift+1…6)
 const VIEWS = [
   ['overview', 'Overview'], ['customers', 'Customers'], ['assets', 'Assets'],
-  ['finance', 'Finance'], ['goals', 'Goals && Plans'], ['linkedin', 'LinkedIn Messages'],
-  ['notes', 'Notes'],
+  ['finance', 'Finance'], ['goals', 'Goals && Plans'], ['notes', 'Notes'],
 ];
 
 function buildMenu() {
@@ -722,8 +739,6 @@ function buildMenu() {
       submenu: [
         { label: 'New…', accelerator: 'CmdOrCtrl+N', click: send('new') },
         { label: 'Find', accelerator: 'CmdOrCtrl+F', click: send('focus-search') },
-        { type: 'separator' },
-        { label: 'Manage LinkedIn accounts…', click: send('accounts') },
         { type: 'separator' },
         { label: 'Export backup…', click: runExportBackup },
         { label: 'Import backup…', click: runImportBackup },
@@ -764,18 +779,6 @@ function buildMenu() {
 // ---------- ipc ----------
 
 const DB_OPS = {
-  createAccount: store.createAccount,
-  updateAccount: store.updateAccount,
-  deleteAccount: store.deleteAccount,
-  createContact: store.createContact,
-  updateContact: store.updateContact,
-  deleteContact: store.deleteContact,
-  restoreContact: store.restoreContact,
-  createMessage: store.createMessage,
-  updateMessage: store.updateMessage,
-  deleteMessage: store.deleteMessage,
-  restoreMessage: store.restoreMessage,
-  setMessageSeen: store.setMessageSeen,
   setAvatar: store.setAvatar,
   removeAvatar: store.removeAvatar,
   setSetting: store.setSetting,
@@ -991,33 +994,6 @@ ipcMain.handle('startup:set', (_e, { enabled, minimized }) => {
   return getStartup();
 });
 
-const EXT_FOR_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
-
-ipcMain.handle('attachment:save', async (_e, id) => {
-  const a = store.getAttachment(id);
-  if (!a) return false;
-  const ext = EXT_FOR_MIME[a.mime] || 'img';
-  const base = (a.name || 'image').replace(/[\\/:*?"<>|]+/g, '_').replace(/\.[a-z0-9]{2,5}$/i, '');
-  const { canceled, filePath } = await dialog.showSaveDialog(win, {
-    title: 'Save image',
-    defaultPath: path.join(app.getPath('downloads'), `${base}.${ext}`),
-    filters: [{ name: 'Image', extensions: [ext] }],
-  });
-  if (canceled || !filePath) return false;
-  fs.writeFileSync(filePath, a.data);
-  return true;
-});
-
-ipcMain.handle('attachment:copy', async (_e, id) => {
-  const a = store.getAttachment(id);
-  if (!a) return false;
-  // Clipboard images are PNG; convert JPEGs. (nativeImage cannot decode webp/gif.)
-  const png = a.mime === 'image/png' ? a.data : nativeImage.createFromBuffer(a.data).toPNG();
-  if (!png.length) return false;
-  await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]);
-  return true;
-});
-
 // ---------- lifecycle ----------
 
 if (!app.requestSingleInstanceLock()) {
@@ -1041,12 +1017,6 @@ if (!app.requestSingleInstanceLock()) {
     protocol.handle('avatar', (req) => {
       const ownerId = decodeURIComponent(new URL(req.url).pathname.slice(1));
       const a = store.getAvatar(ownerId);
-      if (!a) return new Response(null, { status: 404 });
-      return new Response(a.data, { headers: { 'content-type': a.mime, 'cache-control': 'max-age=31536000' } });
-    });
-    protocol.handle('attachment', (req) => {
-      const id = decodeURIComponent(new URL(req.url).pathname.slice(1));
-      const a = store.getAttachment(id);
       if (!a) return new Response(null, { status: 404 });
       return new Response(a.data, { headers: { 'content-type': a.mime, 'cache-control': 'max-age=31536000' } });
     });

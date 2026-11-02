@@ -13,8 +13,6 @@ contextBridge.exposeInMainWorld('api', {
   moveDatabase: () => ipcRenderer.invoke('db:move'),
   getStartup: () => ipcRenderer.invoke('startup:get'),
   setStartup: (opts) => ipcRenderer.invoke('startup:set', opts),
-  saveAttachment: (id) => ipcRenderer.invoke('attachment:save', id),
-  copyAttachment: (id) => ipcRenderer.invoke('attachment:copy', id),
   // name: 'password' (default) or an extra secret such as 'backupCodes' or 'totp'
   // 'light' | 'dark' | 'system': the window frame, menus and Windows dialogs follow it
   setTheme: (theme) => ipcRenderer.invoke('theme:set', theme),

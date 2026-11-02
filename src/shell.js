@@ -2,13 +2,13 @@
 
 // ============================================================
 // App shell: the navigation bar, switching between sections, and helpers shared by the
-// business sections (money, dates, saving records). The LinkedIn tracker lives in renderer.js;
-// each other section registers itself from its own file (overview.js, customers.js, notes.js, …).
+// sections (money, dates, saving records). Each section registers itself from its own file
+// (overview.js, customers.js, notes.js, …); dialogs, toasts and Settings are in common.js.
 // ============================================================
 
 const app = { view: 'overview' };
 const VIEWS = [];
-const VIEW_ORDER = ['overview', 'customers', 'assets', 'finance', 'goals', 'linkedin', 'notes'];
+const VIEW_ORDER = ['overview', 'customers', 'assets', 'finance', 'goals', 'notes'];
 
 /** def: { id, label, icon, mount(), render(), onNew(), focusSearch(), badge() -> { n, tone, title } } */
 function registerView(def) {
@@ -26,7 +26,6 @@ const ICONS = {
   assets: 'M20 13H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1ZM7 19c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2ZM20 3H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1ZM7 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2Z',
   finance: 'M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4Z',
   goals: 'M14.4 6 14 4H5v17h2v-7h5.6l.4 2h7V6h-5.6Z',
-  linkedin: 'M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2ZM6 9h12v2H6V9Zm8 5H6v-2h8v2Zm4-6H6V6h12v2Z',
   notes: 'M19 3H4.99C3.89 3 3 3.9 3 5l.01 14c0 1.1.89 2 1.99 2h10l6-6V5c0-1.1-.9-2-2-2ZM7 8h10v2H7V8Zm5 6H7v-2h5v2Zm2 5.5V14h5.5L14 19.5Z',
   pin: 'M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3Z',
   server: 'M20 13H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1ZM7 19c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2ZM20 3H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1ZM7 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2Z',
@@ -70,10 +69,7 @@ function showView(id) {
   const def = viewDef(id);
   app.view = def.id;
   for (const v of VIEWS) $(`#view-${v.id}`).classList.toggle('hidden', v !== def);
-  document.body.dataset.view = def.id; // the LinkedIn account switcher only shows in its own section
   try { localStorage.setItem('view', def.id); } catch { /* not critical */ }
-  closeLightbox();
-  toggleAccountMenu(false);
   renderRail();
   def.render();
 }
@@ -101,37 +97,6 @@ function refreshAll() {
 function refreshDatalists() {
   refreshNationalities();
   refreshCurrencyList();
-}
-
-// ---------- the LinkedIn tracker as a section ----------
-
-registerView({
-  id: 'linkedin',
-  label: 'LinkedIn Messages',
-  short: 'LinkedIn',
-  icon: 'linkedin',
-  render({ keep = false } = {}) {
-    renderAll({ scroll: keep ? 'keep' : state.query.trim() ? 'hit' : 'bottom' });
-    if (!contactById(state.selectedId)) {
-      const first = $('#contactList .contact');
-      if (first) selectContact(first.dataset.id);
-    } else {
-      requestAnimationFrame(fitComposer);
-    }
-  },
-  onNew: () => openContactModal(),
-  focusSearch,
-  badge() {
-    const index = buildIndex();
-    const n = state.db.contacts.filter((c) => contactStatus(index.get(c.id) || []) === 'awaiting').length;
-    return { n, title: `${n} awaiting reply` };
-  },
-});
-
-/** Open a LinkedIn conversation from another section. */
-function openConversation(contactId) {
-  showView('linkedin');
-  showContact(contactId);
 }
 
 // ---------- dates without a time ('YYYY-MM-DD', on the app clock) ----------
@@ -543,7 +508,6 @@ function bindShellEvents() {
     e.preventDefault();
     const [what, id] = a.dataset.open.split(':');
     if (what === 'settings-money') openSettings({ focusMoney: true });
-    else if (what === 'conversation') openConversation(id);
     else if (what === 'customer') showCustomer(id);
     else if (what === 'asset') showAsset(id);
     else if (what === 'view') showView(id);
@@ -555,10 +519,6 @@ function bindShellEvents() {
     if (cmd === 'new' && viewDef().onNew) viewDef().onNew();
     if (cmd === 'focus-search' && !$('#modal').open && viewDef().focusSearch) viewDef().focusSearch();
     if (cmd === 'settings') openSettings();
-    if (cmd === 'accounts') {
-      showView('linkedin');
-      openAccountsManager();
-    }
     if (cmd === 'shortcuts') showShortcuts();
   });
 
@@ -566,10 +526,6 @@ function bindShellEvents() {
     const { message, ...db } = data;
     state.db = db;
     applyClock(db.settings.timeZone);
-    state.selectedId = null;
-    state.drafts = {};
-    composerTray.clear();
-    closeLightbox();
     for (const v of VIEWS) if (v.reset) v.reset();
     refreshAll();
     if (message) toast(message);
@@ -588,7 +544,7 @@ function bindShellEvents() {
 async function boot() {
   // an encrypted database that this PC doesn't remember the password for: ask for it first
   if ((await window.api.security('state')).status === 'locked') await unlockScreen();
-  bindEvents(); // LinkedIn section
+  bindCommonEvents();
   bindShellEvents();
   bindPasswordRequests();
   state.db = await window.api.load();

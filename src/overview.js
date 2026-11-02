@@ -2,7 +2,7 @@
 
 // ============================================================
 // Overview: this month at a glance, 12-month growth, what's coming up,
-// goals, LinkedIn replies you're waiting for and your top clients.
+// goals and your top clients.
 // ============================================================
 
 // chart series colours (validated for colour-blind separation; values are also in the tooltip and Finance)
@@ -93,10 +93,6 @@ function renderOverview() {
         ${goalsSummaryHtml()}
       </section>
       <section class="card box">
-        <div class="box-head"><h3>LinkedIn · awaiting reply</h3><button type="button" class="link-btn" data-open="view:linkedin">Open</button></div>
-        ${awaitingHtml()}
-      </section>
-      <section class="card box">
         <div class="box-head"><h3>Top clients · 12 months</h3><button type="button" class="link-btn" data-open="view:customers">Customers</button></div>
         ${topClientsHtml()}
       </section>
@@ -108,7 +104,7 @@ function onboardingHtml() {
   return `
     <section class="card onboarding">
       <h2>Welcome to HOTIT Manager</h2>
-      <p>Your LinkedIn message log is in <a class="url-link" data-open="view:linkedin">LinkedIn</a>, as before. Start filling in the rest:</p>
+      <p>Start by adding what you already have:</p>
       <div class="settings-buttons">
         <button class="btn secondary small" data-ov="customer">+ Add a client</button>
         <button class="btn secondary small" data-ov="asset">+ Add a server or account</button>
@@ -163,23 +159,6 @@ function goalsSummaryHtml() {
         <small>${esc(p.text)}${g.dueDate ? ` · due ${esc(fmtDay(g.dueDate))}` : ''}</small>
       </button>`;
   }).join('');
-}
-
-function awaitingHtml() {
-  const index = buildIndex();
-  const rows = state.db.contacts
-    .map((c) => ({ c, msgs: index.get(c.id) || [] }))
-    .filter((r) => contactStatus(r.msgs) === 'awaiting')
-    .map((r) => ({ ...r, last: r.msgs[r.msgs.length - 1] }))
-    .sort((a, b) => a.last.sentAt.localeCompare(b.last.sentAt));
-  if (!rows.length) return '<div class="box-empty">Nobody owes you a reply.</div>';
-  return `<div class="mini-list">${rows.slice(0, 6).map(({ c, last }) => `
-    <button type="button" class="mini-row" data-open="conversation:${esc(c.id)}">
-      ${contactAvatar(c, 'xs')}
-      <span class="mini-text">${esc(c.name)}<small>${last.seenAt ? 'Seen, no reply' : 'Not seen yet'}</small></span>
-      <span class="mini-date">${esc(ago(last.sentAt))}</span>
-    </button>`).join('')}</div>
-    ${rows.length > 6 ? `<div class="box-more">and ${rows.length - 6} more</div>` : ''}`;
 }
 
 function topClientsHtml() {

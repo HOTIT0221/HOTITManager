@@ -1,8 +1,8 @@
 {
   "name": "lmessage-tracker",
   "productName": "IT Business Manager",
-  "version": "3.7.0",
-  "description": "Run your IT business: customers, assets, finances, goals and plans, and a LinkedIn message log.",
+  "version": "3.8.0",
+  "description": "Run your IT business: customers, assets, finances, goals and plans, and notes.",
   "main": "main.js",
   "author": "James Clarke",
   "license": "UNLICENSED",

@@ -14,11 +14,8 @@ const STATUS_ORDER = { active: 0, paused: 1, former: 2 };
 
 const cu = { selectedId: null, query: '', filter: 'all' };
 
-/** Their own photo, else the photo of their linked LinkedIn contact. */
 function customerAvatar(c, size = '') {
-  const contact = c.contactId ? contactById(c.contactId) : null;
-  const src = avatarSrc(c.id, c.avatarVersion) || (contact ? avatarSrc(contact.id, contact.avatarVersion) : null);
-  return avatarHtml(c.name, c.id, size, src);
+  return avatarHtml(c.name, c.id, size, avatarSrc(c.id, c.avatarVersion));
 }
 
 function customerTransactions(id) {
@@ -78,17 +75,11 @@ function renderCustomerList() {
     list.innerHTML = `<li class="list-empty">No customers match${cu.query.trim() ? ` “${esc(cu.query.trim())}”` : ' this filter'}.</li>`;
     return;
   }
-  const index = buildIndex();
   list.innerHTML = rows.map((c) => {
     const income = customerIncome(c.id, yearAgo).total;
     const sub = [c.role && c.company ? `${c.role} at ${c.company}` : c.company || c.role, c.country].filter(Boolean);
     const badges = [`<span class="badge kind-${c.kind}">${CUSTOMER_KINDS[c.kind].label}</span>`];
     if (c.status !== 'active') badges.push(`<span class="badge muted">${CUSTOMER_STATUS[c.status]}</span>`);
-    const contact = c.contactId ? contactById(c.contactId) : null;
-    if (contact) {
-      const msgs = index.get(contact.id) || [];
-      if (contactStatus(msgs) === 'awaiting') badges.push(`<span class="badge awaiting" title="LinkedIn">Awaiting reply · ${ago(msgs[msgs.length - 1].sentAt)}</span>`);
-    }
     for (const t of tagsOf(c.tags).slice(0, 3)) badges.push(`<span class="badge tag">${hlq(t, cu.query)}</span>`);
     return `
       <li class="contact ${c.id === cu.selectedId ? 'active' : ''} ${c.status === 'former' ? 'dim' : ''}" data-id="${esc(c.id)}" tabindex="0">
@@ -115,7 +106,7 @@ function renderCustomerDetail() {
         <div class="empty-icon">${icon('customers', 56)}</div>
         <h2>${has ? 'Select a customer' : 'Your clients and collaborators'}</h2>
         <p>${has ? 'Pick someone from the list, or add a new customer.'
-          : 'Keep everyone you work with in one place — contact details, what they paid you, their LinkedIn conversation, tasks and servers you run for them.'}</p>
+          : 'Keep everyone you work with in one place — contact details, what they paid you, tasks and servers you run for them.'}</p>
         <button class="btn primary" data-cu="new">Add a customer</button>
       </div>`;
     return;
@@ -253,33 +244,10 @@ function showCustomer(id) {
   $(`#cuList .contact[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' });
 }
 
-function customerPresetFromContact(contact) {
-  return {
-    name: contact.name,
-    linkedinUrl: contact.linkedinUrl,
-    country: contact.nationality,
-    role: contact.headline,
-    contactId: contact.id,
-    kind: 'lead',
-  };
-}
-
-function contactOptions(selectedId) {
-  const list = [...state.db.contacts].sort((a, b) => a.name.localeCompare(b.name));
-  return opt('', '— Not linked —', !selectedId) + list.map((x) => {
-    const acct = multiAccount() ? accountById(x.accountId) : null;
-    return opt(x.id, `${x.name}${acct ? ` (via ${acct.name})` : ''}`, x.id === selectedId);
-  }).join('');
-}
-
-/**
- * New or edit. preset fills a new customer (e.g. from a LinkedIn contact).
- * Created from the LinkedIn section, you stay there.
- */
-function openCustomerModal(existing = null, preset = {}, { focus = '' } = {}) {
+/** New or edit. preset fills a new customer. */
+function openCustomerModal(existing = null, preset = {}) {
   const c = existing || { kind: 'client', status: 'active', ...preset };
   const id = existing ? existing.id : uid();
-  const fromLinkedIn = !existing && app.view === 'linkedin';
   let avatarEditor = null;
   openModal({
     title: existing ? 'Edit customer' : 'New customer',
@@ -317,10 +285,6 @@ function openCustomerModal(existing = null, preset = {}, { focus = '' } = {}) {
         <label for="c-url">LinkedIn profile URL</label>
         <input id="c-url" value="${esc(c.linkedinUrl)}" placeholder="https://www.linkedin.com/in/…" spellcheck="false">
       </div>
-      <div class="field">
-        <label for="c-contact">LinkedIn conversation (from LinkedIn Messages)</label>
-        <select id="c-contact">${contactOptions(c.contactId)}</select>
-      </div>
       <div class="field-row">
         <div class="field"><label for="c-since">Working together since</label><input id="c-since" type="date" value="${esc(c.since)}"></div>
         <div class="field"><label for="c-tags">Tags (comma separated)</label><input id="c-tags" value="${esc(c.tags)}" placeholder="e.g. React, long-term, agency"></div>
@@ -333,24 +297,18 @@ function openCustomerModal(existing = null, preset = {}, { focus = '' } = {}) {
     onOpen() {
       const nameInput = $('#c-name');
       const urlInput = $('#c-url');
-      const contact = c.contactId ? contactById(c.contactId) : null;
       avatarEditor = setupAvatarEditor({
         seed: id,
         getName: () => nameInput.value.trim(),
-        currentSrc: avatarSrc(id, existing?.avatarVersion) || (contact ? avatarSrc(contact.id, contact.avatarVersion) : null),
+        currentSrc: avatarSrc(id, existing?.avatarVersion),
       });
       let autoName = !c.name;
       nameInput.addEventListener('input', () => { autoName = !nameInput.value.trim(); avatarEditor.redraw(); });
       urlInput.addEventListener('input', () => {
         if (autoName) nameInput.value = nameFromUrl(urlInput.value);
-        // link the logged conversation with the same profile
-        const n = normalizeUrl(urlInput.value);
-        const match = n && state.db.contacts.find((x) => x.linkedinUrl && normalizeUrl(x.linkedinUrl) === n);
-        if (match && !$('#c-contact').value) $('#c-contact').value = match.id;
         avatarEditor.redraw();
       });
-      if (focus === 'contact') $('#c-contact').focus();
-      else nameInput.focus();
+      nameInput.focus();
     },
     async onOk() {
       const data = {
@@ -364,7 +322,6 @@ function openCustomerModal(existing = null, preset = {}, { focus = '' } = {}) {
         country: countryFromLegacyValue($('#c-country').value.trim()),
         website: $('#c-web').value.trim(),
         linkedinUrl: $('#c-url').value.trim(),
-        contactId: $('#c-contact').value || null,
         since: $('#c-since').value,
         tags: tagsOf($('#c-tags').value).join(', '),
         notes: $('#c-notes').value.trim(),
@@ -379,20 +336,15 @@ function openCustomerModal(existing = null, preset = {}, { focus = '' } = {}) {
       } catch {
         return false;
       }
-      if (fromLinkedIn) {
-        refreshAll();
-        toast(`${stored.name} added to customers`, { label: 'Open', fn: () => showCustomer(stored.id) });
-      } else {
-        cu.selectedId = stored.id;
-        if (!existing) {
-          cu.filter = 'all';
-          cu.query = '';
-          $('#cuSearch').value = '';
-        }
-        if (app.view === 'customers') refreshAll();
-        else showCustomer(stored.id);
-        toast(existing ? 'Customer updated' : 'Customer added');
+      cu.selectedId = stored.id;
+      if (!existing) {
+        cu.filter = 'all';
+        cu.query = '';
+        $('#cuSearch').value = '';
       }
+      if (app.view === 'customers') refreshAll();
+      else showCustomer(stored.id);
+      toast(existing ? 'Customer updated' : 'Customer added');
       return true;
     },
   });
@@ -406,8 +358,7 @@ function deleteCustomerDialog(c) {
   openModal({
     title: 'Delete customer?',
     body: `<p>This removes <strong>${esc(c.name)}</strong>.${linked.length
-      ? ` Their ${linked.join(', ')} are kept, just no longer linked to them.` : ''}</p>
-      <p class="help">Their LinkedIn conversation is not touched.</p>`,
+      ? ` Their ${linked.join(', ')} are kept, just no longer linked to them.` : ''}</p>`,
     okText: 'Delete',
     danger: true,
     async onOk() {

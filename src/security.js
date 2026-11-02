@@ -102,7 +102,7 @@ function openEncryptDialog() {
   openModal({
     title: 'Encrypt your database',
     body: `
-      <p class="modal-text">Everything in the database (customers, assets, finances, goals, LinkedIn messages and images) is
+      <p class="modal-text">Everything in the database (customers, assets, finances, goals, plans and notes) is
         encrypted with your password. A copy of the file can't be read without it. Your existing automatic backups are
         encrypted too.</p>
       <p class="modal-text">With the app, the database file and this password you can open all your data on any PC,
@@ -298,7 +298,7 @@ async function maybeOfferEncryption() {
   openModal({
     title: 'Protect your data with a password?',
     body: `<p class="modal-text">Your database is not encrypted, so anyone who gets a copy of the file can read your customers,
-      finances, bank details and messages. You can encrypt it with a password now, or later in Settings → Security.</p>`,
+      finances, bank details and notes. You can encrypt it with a password now, or later in Settings → Security.</p>`,
     okText: 'Set a password…',
     onOk() {
       setTimeout(openEncryptDialog);
