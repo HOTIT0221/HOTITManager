@@ -18,8 +18,8 @@ Tracker; since version 3.8 the LinkedIn message log is a separate app, **LinkedI
 
 ## Use it
 
-- **Install:** run `dist\IT Business Manager Setup 3.8.0.exe` (installs over earlier versions), or
-- **No install:** run `dist\ITBusinessManager-Portable-3.8.0.exe`.
+- **Install:** run `dist\HOTIT Manager Setup 3.9.0.exe` (installs over earlier versions), or
+- **No install:** run `dist\HOTITManager-Portable-3.9.0.exe`.
 
 ## Your data
 

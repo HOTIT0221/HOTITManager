@@ -1,7 +1,7 @@
 {
   "name": "lmessage-tracker",
-  "productName": "IT Business Manager",
-  "version": "3.8.0",
+  "productName": "HOTIT Manager",
+  "version": "3.9.0",
   "description": "Run your IT business: customers, assets, finances, goals and plans, and notes.",
   "main": "main.js",
   "author": "James Clarke",
@@ -17,7 +17,7 @@
   },
   "build": {
     "appId": "com.jamesdavidclarke.lmessagetracker",
-    "productName": "IT Business Manager",
+    "productName": "HOTIT Manager",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -35,18 +35,17 @@
       "target": [
         "nsis",
         "portable"
-      ],
-      "icon": "build/icon.png"
+      ]
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "IT Business Manager"
+      "shortcutName": "HOTIT Manager"
     },
     "portable": {
-      "artifactName": "ITBusinessManager-Portable-${version}.exe"
+      "artifactName": "HOTITManager-Portable-${version}.exe"
     }
   }
 }

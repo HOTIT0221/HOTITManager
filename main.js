@@ -14,6 +14,12 @@ const APP_NAME = 'IT Business Manager'; // internal name: data folder and startu
 const DISPLAY_NAME = 'HOTIT Manager'; // the name shown to the user
 const LEGACY_APP_NAME = 'LinkedIn Message Tracker'; // this app's name before version 3
 
+// The product is shown to Windows as "HOTIT Manager" (see package.json), but the data folder,
+// caches and session stay under APP_NAME. Pin them here so renaming the product never moves the
+// user's data to a new, empty folder.
+app.setName(APP_NAME);
+app.setPath('userData', path.join(app.getPath('appData'), APP_NAME));
+
 /**
  * The app used to be called "LinkedIn Message Tracker" and kept its data in a folder of that name.
  * On the first start under the new name, copy that folder's contents over (the old folder is left
@@ -477,7 +483,6 @@ function createWindow() {
     minHeight: 560,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0d1117' : '#f5f7fb',
     title: DISPLAY_NAME,
-    icon: path.join(__dirname, 'build', 'icon.png'),
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
